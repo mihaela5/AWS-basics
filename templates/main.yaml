@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Master Root Stack orchestrating CloudShirt AWS Basics infrastructure.
+
+Parameters:
+  
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 KeyPair for SSH administration
+    Default: vockey
+    
+  DBUsername:
+    Type: String
+    Default: cloudshirtadmin
+    NoEcho: true
+    
+  DBPassword:
+    Type: String
+    Default: ChangeMe123!
+    NoEcho: true
+
+Resources:
+    # 1. Base Networking (VPCs, Subnets across AZ A & AZ B, Route Tables)
+  NetworkingStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./01-networking.yaml
+
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./02-security.yaml
+
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./03-storage.yaml
+
+  DatabaseStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./04-database.yaml
+
+  ApplicationStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./05-application.yaml
+
+  MonitoringStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./06-monitoring.yaml
+
+  ServerlessStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./07-serverless.yaml
+
+Outputs:
+  NetworkingStackOutput:
+    Description: "Networking Stack ID"
+    Value: !Ref NetworkingStack
+
+  SecurityStackOutput:
+    Description: "Security Stack ID"
+    Value: !Ref SecurityStack
+
+  StorageStackOutput:
+    Description: "Storage Stack ID"
+    Value: !Ref StorageStack
+
+  DatabaseStackOutput:
+    Description: "Database Stack ID"
+    Value: !Ref DatabaseStack
+
+  ApplicationStackOutput:
+    Description: "Application Stack ID"
+    Value: !Ref ApplicationStack
+
+  MonitoringStackOutput:
+    Description: "Monitoring Stack ID"
+    Value: !Ref MonitoringStack
+
+  ServerlessStackOutput:
+    Description: "Serverless Stack ID"
+    Value: !Ref ServerlessStack
