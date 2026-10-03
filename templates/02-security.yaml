@@ -1,0 +1,50 @@
+Description: Security groups for the CloudShirt environment.
+
+Resources:
+  # Security group for the ALB
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic from the internet to the Application Load Balancer
+      VpcId: !ImportValue networking:VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: CloudShirtLoadBalancerSecurityGroup
+
+
+  # Security group for the CloudShirt web servers.
+  # Web servers only accept HTTP traffic coming from the Load Balancer.
+  WebServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP traffic from the Application Load Balancer
+      VpcId: !ImportValue networking:VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: CloudShirtWebServerSecurityGroup
+
+
+Outputs:
+
+  LoadBalancerSecurityGroupRef:
+    Description: Reference to the Load Balancer security group.
+    Value: !Ref LoadBalancerSecurityGroup
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", LoadBalancerSecurityGroup ] ]
+
+
+  WebServerSecurityGroupRef:
+    Description: Reference to the web server security group.
+    Value: !Ref WebServerSecurityGroup
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", WebServerSecurityGroup ] ]

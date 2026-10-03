@@ -1,0 +1,254 @@
+Description: CloudShirt VPC with two public and two private subnets across two Availability Zones.
+
+Parameters:
+
+  VPCCIDR:
+    Description: Please enter the IP range (CIDR notation) for the CloudShirt VPC.
+    Type: String
+    Default: 10.0.0.0/16
+
+  PublicSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for public subnet 1.
+    Type: String
+    Default: 10.0.1.0/24
+
+  PublicSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for public subnet 2.
+    Type: String
+    Default: 10.0.2.0/24
+
+  PrivateSubnet1CIDR:
+    Description: Please enter the IP range (CIDR notation) for private subnet 1.
+    Type: String
+    Default: 10.0.51.0/24
+
+  PrivateSubnet2CIDR:
+    Description: Please enter the IP range (CIDR notation) for private subnet 2.
+    Type: String
+    Default: 10.0.52.0/24
+
+  AvailabilityZone1:
+    Description: Please enter the name of the first Availability Zone.
+    Type: String
+    Default: eu-central-1a
+
+  AvailabilityZone2:
+    Description: Please enter the name of the second Availability Zone.
+    Type: String
+    Default: eu-central-1b
+
+
+Resources:
+
+  CloudShirtVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: CloudShirtVPC
+
+
+  # Internet Gateway to allow access to the outside world.
+  CloudShirtInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: CloudShirtInternetGateway
+
+
+  # Connect the Internet Gateway to the VPC.
+  CloudShirtVPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref CloudShirtInternetGateway
+      VpcId: !Ref CloudShirtVPC
+
+
+  # First public subnet in Availability Zone 1.
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Ref PublicSubnet1CIDR
+      AvailabilityZone: !Ref AvailabilityZone1
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref CloudShirtVPC
+      Tags:
+        - Key: Name
+          Value: CloudShirtPublicSubnet1
+
+
+  # Second public subnet in Availability Zone 2.
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Ref PublicSubnet2CIDR
+      AvailabilityZone: !Ref AvailabilityZone2
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref CloudShirtVPC
+      Tags:
+        - Key: Name
+          Value: CloudShirtPublicSubnet2
+
+
+  # First private subnet in Availability Zone 1.
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      AvailabilityZone: !Ref AvailabilityZone1
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref CloudShirtVPC
+      Tags:
+        - Key: Name
+          Value: CloudShirtPrivateSubnet1
+
+
+  # Second private subnet in Availability Zone 2.
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      AvailabilityZone: !Ref AvailabilityZone2
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref CloudShirtVPC
+      Tags:
+        - Key: Name
+          Value: CloudShirtPrivateSubnet2
+
+
+  # Create a route table for the public subnets.
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref CloudShirtVPC
+      Tags:
+        - Key: Name
+          Value: CloudShirtPublicRouteTable
+
+
+  # Create the default route from the public subnets to the Internet Gateway.
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: CloudShirtVPCGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref CloudShirtInternetGateway
+      RouteTableId: !Ref PublicRouteTable
+
+
+  # Associate the public route table with public subnet 1.
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet1
+
+
+  # Associate the public route table with public subnet 2.
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet2
+
+
+  # Create a separate route table for the private subnets.
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref CloudShirtVPC
+      Tags:
+        - Key: Name
+          Value: CloudShirtPrivateRouteTable
+
+
+  # Associate the private route table with private subnet 1.
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+
+
+  # Associate the private route table with private subnet 2.
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+
+
+Outputs:
+
+  VPCRef:
+    Description: Reference to the CloudShirt VPC.
+    Value: !Ref CloudShirtVPC
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", VPC ] ]
+
+
+  VPCGatewayAttachmentRef:
+    Description: Reference to the VPC Gateway Attachment.
+    Value: !Ref CloudShirtVPCGatewayAttachment
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", VPCGatewayAttachment ] ]
+
+
+  PublicRouteTableRef:
+    Description: Reference to the public route table.
+    Value: !Ref PublicRouteTable
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", PublicRouteTable ] ]
+
+
+  PrivateRouteTableRef:
+    Description: Reference to the private route table.
+    Value: !Ref PrivateRouteTable
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", PrivateRouteTable ] ]
+
+
+  PublicSubnet1Ref:
+    Description: Reference to public subnet 1.
+    Value: !Ref PublicSubnet1
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", PublicSubnet1 ] ]
+
+
+  PublicSubnet2Ref:
+    Description: Reference to public subnet 2.
+    Value: !Ref PublicSubnet2
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", PublicSubnet2 ] ]
+
+
+  PrivateSubnet1Ref:
+    Description: Reference to private subnet 1.
+    Value: !Ref PrivateSubnet1
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", PrivateSubnet1 ] ]
+
+
+  PrivateSubnet2Ref:
+    Description: Reference to private subnet 2.
+    Value: !Ref PrivateSubnet2
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", PrivateSubnet2 ] ]
+
+
+  AvailabilityZone1Ref:
+    Description: Reference to Availability Zone 1.
+    Value: !Ref AvailabilityZone1
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", AvailabilityZone1 ] ]
+
+
+  AvailabilityZone2Ref:
+    Description: Reference to Availability Zone 2.
+    Value: !Ref AvailabilityZone2
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", AvailabilityZone2 ] ]
