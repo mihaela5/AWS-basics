@@ -18,6 +18,10 @@ Parameters:
     Default: ChangeMe123!
     NoEcho: true
 
+  UserDataScriptUrl:
+    Type: String
+    Description: URL of the CloudShirt EC2 userdata script
+
 Resources:
     # 1. Base Networking (VPCs, Subnets across AZ A & AZ B, Route Tables)
   NetworkingStack:
@@ -35,7 +39,7 @@ Resources:
 
   StorageStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: NetworkingStack
+    DependsOn: [NetworkingStack, SecurityStack]
     Properties:
       TemplateURL: ./03-storage.yaml
       Parameters:
@@ -45,7 +49,7 @@ Resources:
 
   DatabaseStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: NetworkingStack
+    DependsOn: [NetworkingStack, SecurityStack]
     Properties:
       TemplateURL: ./04-database.yaml
       Parameters:
@@ -62,15 +66,20 @@ Resources:
       TemplateURL: ./05-application.yaml
       Parameters:
         VpcId: !GetAtt NetworkingStack.Outputs.VPCRef
+        PublicSubnet1: !GetAtt NetworkingStack.Outputs.PublicSubnet1Ref
+        WebServerSecurityGroupId: !GetAtt SecurityStack.Outputs.WebServerSecurityGroupRef
         FileSystemId: !GetAtt StorageStack.Outputs.FileSystemId
         DBEndpoint: !GetAtt DatabaseStack.Outputs.DBEndpoint
         DBPort: !GetAtt DatabaseStack.Outputs.DBPort
         DBUsername: !Ref DBUsername
         DBPassword: !Ref DBPassword
 
+        KeyName: !Ref KeyName
+        UserDataScriptUrl: !Ref UserDataScriptUrl
+
   MonitoringStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: NetworkingStack
+    DependsOn: [NetworkingStack, SecurityStack]
     Properties:
       TemplateURL: ./06-monitoring.yaml
       Parameters:

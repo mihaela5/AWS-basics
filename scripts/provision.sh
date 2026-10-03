@@ -4,7 +4,8 @@
 #   2. Creates the S3 staging bucket if it does not exist yet.
 #   3. Packages templates/main.yaml (uploads the nested templates to S3).
 #   4. Creates or updates the CloudShirtInfrastructure root stack.
-#   5. Prints the outputs of the root stack and all nested stacks.
+#   5. Passes the userdata.sh URL to the application stack.
+#   6. Prints outputs of the root stack and nested stacks.
 #
 # Usage:
 #   bash scripts/provision.sh [options]
@@ -16,15 +17,25 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 TEMPLATE_FILE="${ROOT_DIR}/templates/main.yaml"
 PACKAGED_TEMPLATE="${ROOT_DIR}/packaged-main.yaml"
+USERDATA_FILE="${ROOT_DIR}/scripts/userdata.sh"
+
 
 # Defaults (override with CLI flags or environment variables) --------------
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-}}"
-DEFAULT_REGION="eu-central-1"   # matches the AZ defaults in templates/01-networking.yaml
+DEFAULT_REGION="us-east-1"  
 STACK_NAME="${STACK_NAME:-CloudShirtInfrastructure}"
 STAGING_BUCKET="${STAGING_BUCKET:-}"
 KEY_NAME="${KEY_NAME:-vockey}"
 DB_USERNAME="${DB_USERNAME:-cloudshirtadmin}"
 DB_PASSWORD="${DB_PASSWORD:-ChangeMe123!}"
+
+# Shared repository.
+# Can also be overridden using an environment variable.
+GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-mihaela5/AWS-basics}"
+GITHUB_BRANCH="${GITHUB_BRANCH:-main}"
+
+USERDATA_SCRIPT_URL="${USERDATA_SCRIPT_URL:-https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_BRANCH}/scripts/userdata.sh}"
+
 DELETE_MODE="false"
 ASSUME_YES="false"
 
@@ -106,6 +117,18 @@ if [[ -z "$STAGING_BUCKET" ]]; then
   STAGING_BUCKET="cloudshirt-cfn-staging-${ACCOUNT_ID}"
 fi
 
+# Check required files
+[[ -f "$TEMPLATE_FILE" ]] || {
+  error "Root template not found: $TEMPLATE_FILE"
+  exit 1
+}
+
+[[ -f "$USERDATA_FILE" ]] || {
+  error "UserData script not found: $USERDATA_FILE"
+  exit 1
+}
+
+
 # Safety net: nested stack templates referenced from main.yaml must exist and
 # must not be empty placeholders, or the deployment will always fail.
 check_nested_templates() {
@@ -167,12 +190,15 @@ fi
 [[ -f "$TEMPLATE_FILE" ]] || { error "Root template not found: $TEMPLATE_FILE"; exit 1; }
 check_nested_templates
 
+# Deployment information
 info "Account : $ACCOUNT_ID"
 info "Region  : $REGION"
 info "Stack   : $STACK_NAME"
 info "Bucket  : s3://$STAGING_BUCKET"
+info "UserData: $USERDATA_SCRIPT_URL"
 echo
 
+# Ensure staging bucket exists
 info "Ensuring staging bucket exists ..."
 if aws s3api head-bucket --bucket "$STAGING_BUCKET" 2>/dev/null; then
   info "Staging bucket already exists."
@@ -203,9 +229,10 @@ aws cloudformation deploy \
   --parameter-overrides \
       "KeyName=${KEY_NAME}" \
       "DBUsername=${DB_USERNAME}" \
-      "DBPassword=${DB_PASSWORD}"
+      "DBPassword=${DB_PASSWORD}" \
+      "UserDataScriptUrl=${USERDATA_SCRIPT_URL}"
 
-# Report the results
+# Report root stack outputs
 echo
 info "Deployment complete."
 echo
