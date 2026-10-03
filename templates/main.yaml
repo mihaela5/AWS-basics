@@ -27,33 +27,57 @@ Resources:
 
   SecurityStack:
     Type: AWS::CloudFormation::Stack
+    DependsOn: NetworkingStack
     Properties:
       TemplateURL: ./02-security.yaml
+      Parameters:
+        VpcId: !GetAtt NetworkingStack.Outputs.VPCRef
 
   StorageStack:
     Type: AWS::CloudFormation::Stack
+    DependsOn: NetworkingStack
     Properties:
       TemplateURL: ./03-storage.yaml
+      Parameters:
+        PublicSubnet1: !GetAtt NetworkingStack.Outputs.PublicSubnet1Ref
+        PublicSubnet2: !GetAtt NetworkingStack.Outputs.PublicSubnet2Ref
+        EFSSecurityGroupId: !GetAtt SecurityStack.Outputs.EFSSecurityGroupRef
 
   DatabaseStack:
     Type: AWS::CloudFormation::Stack
+    DependsOn: NetworkingStack
     Properties:
       TemplateURL: ./04-database.yaml
+      Parameters:
+        PrivateSubnet1: !GetAtt NetworkingStack.Outputs.PrivateSubnet1Ref
+        PrivateSubnet2: !GetAtt NetworkingStack.Outputs.PrivateSubnet2Ref
+        DBSecurityGroupId: !GetAtt SecurityStack.Outputs.DBSecurityGroupRef
+        DBUsername: !Ref DBUsername
+        DBPassword: !Ref DBPassword
 
   ApplicationStack:
     Type: AWS::CloudFormation::Stack
+    DependsOn: [NetworkingStack, SecurityStack]
     Properties:
       TemplateURL: ./05-application.yaml
+      Parameters:
+        VpcId: !GetAtt NetworkingStack.Outputs.VPCRef
 
   MonitoringStack:
     Type: AWS::CloudFormation::Stack
+    DependsOn: NetworkingStack
     Properties:
       TemplateURL: ./06-monitoring.yaml
+      Parameters:
+        VpcId: !GetAtt NetworkingStack.Outputs.VPCRef
 
   ServerlessStack:
     Type: AWS::CloudFormation::Stack
+    DependsOn: NetworkingStack
     Properties:
       TemplateURL: ./07-serverless.yaml
+      Parameters:
+        VpcId: !GetAtt NetworkingStack.Outputs.VPCRef
 
 Outputs:
   NetworkingStackOutput:
