@@ -57,11 +57,16 @@ Resources:
 
   ApplicationStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: [NetworkingStack, SecurityStack]
+    DependsOn: [NetworkingStack, SecurityStack, StorageStack, DatabaseStack]
     Properties:
       TemplateURL: ./05-application.yaml
       Parameters:
         VpcId: !GetAtt NetworkingStack.Outputs.VPCRef
+        FileSystemId: !GetAtt StorageStack.Outputs.FileSystemId
+        DBEndpoint: !GetAtt DatabaseStack.Outputs.DBEndpoint
+        DBPort: !GetAtt DatabaseStack.Outputs.DBPort
+        DBUsername: !Ref DBUsername
+        DBPassword: !Ref DBPassword
 
   MonitoringStack:
     Type: AWS::CloudFormation::Stack
