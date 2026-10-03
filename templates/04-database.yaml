@@ -1,0 +1,71 @@
+Description: Database Layer - Amazon RDS SQL Server instance in private subnets (REQ-04).
+
+Parameters:
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First private subnet ID (AZ 1 / 10.0.51.0/24)
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second private subnet ID (AZ 2 / 10.0.52.0/24)
+
+  DBSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security Group allowing SQL Server (port 1433) traffic from web servers
+
+  DBUsername:
+    Type: String
+    Default: cloudshirtadmin
+    Description: Master username for SQL Server administrator
+    NoEcho: true
+
+  DBPassword:
+    Type: String
+    Default: ChangeMe123!
+    Description: Master password for SQL Server administrator
+    NoEcho: true
+
+Resources:
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: CloudShirt Subnet Group spanning private subnets across 2 AZs
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        - Key: Name
+          Value: CloudShirtDBSubnetGroup
+
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: cloudshirt-db
+      Engine: sqlserver-ex
+      LicenseModel: license-included
+      DBInstanceClass: db.t3.small
+      AllocatedStorage: 20
+      StorageType: gp2
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroupId
+      PubliclyAccessible: false
+      MultiAZ: false
+      MonitoringInterval: 0
+      AutoMinorVersionUpgrade: true
+      Tags:
+        - Key: Name
+          Value: CloudShirt-RDS-Database
+
+Outputs:
+  DBEndpoint:
+    Description: Hostname address of the RDS SQL Server instance
+    Value: !GetAtt DBInstance.Endpoint.Address
+
+  DBPort:
+    Description: Port of the RDS SQL Server instance
+    Value: !GetAtt DBInstance.Endpoint.Port
