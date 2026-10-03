@@ -1,0 +1,77 @@
+Description: Storage Layer - Amazon EFS filesystem for shared logs (REQ-03) and Amazon S3 bucket for RDS exports (REQ-07).
+
+Parameters:
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet in Availability Zone 1 for EFS Mount Target
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Subnet in Availability Zone 2 for EFS Mount Target
+
+  EFSSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security Group allowing NFS (port 2049) traffic from web instances
+
+Resources:
+  EFSFileSystem:
+    Type: AWS::EFS::FileSystem
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: bursting
+      FileSystemTags:
+        - Key: Name
+          Value: CloudShirt-Log-Storage
+
+  # Mount target in Public Subnet 1 (AZ 1)
+  EFSMountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroups:
+        - !Ref EFSSecurityGroupId
+
+  # Mount target in Public Subnet 2 (AZ 2)
+  EFSMountTarget2:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref EFSFileSystem
+      SubnetId: !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref EFSSecurityGroupId
+
+  # Amazon S3 Bucket for RDS Order Exports
+  OrderExportBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: CloudShirt-Order-Exports
+
+Outputs:
+  FileSystemId:
+    Description: ID of the EFS FileSystem to mount inside UserData
+    Value: !Ref EFSFileSystem
+
+  S3BucketName:
+    Description: Name of the provisioned S3 Bucket for order exports
+    Value: !Ref OrderExportBucket
+
+  S3BucketArn:
+    Description: ARN of the S3 Bucket for Lambda triggers and IAM policies
+    Value: !GetAtt OrderExportBucket.Arn

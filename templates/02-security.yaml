@@ -1,12 +1,17 @@
 Description: Security groups for the CloudShirt environment.
 
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where security groups will be created
+
 Resources:
   # Security group for the ALB
   LoadBalancerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Allow HTTP traffic from the internet to the Application Load Balancer
-      VpcId: !ImportValue networking:VPC
+      VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
@@ -23,7 +28,7 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Allow HTTP traffic from the Application Load Balancer
-      VpcId: !ImportValue networking:VPC
+      VpcId: !Ref VpcId
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
@@ -32,6 +37,54 @@ Resources:
       Tags:
         - Key: Name
           Value: CloudShirtWebServerSecurityGroup
+
+  EFSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow NFS traffic from Web Server instances to EFS mount targets
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 2049
+          ToPort: 2049
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: CloudShirtEFSSecurityGroup
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SQL Server traffic from Web Server instances
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 1433
+          ToPort: 1433
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: CloudShirtDBSecurityGroup
+
+  MonitoringSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Filebeat from Web Servers (9200) and Kibana access for Admins (5601)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 9200
+          ToPort: 9200
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+          Description: Elasticsearch API ingestion from web fleet Filebeat
+        - IpProtocol: tcp
+          FromPort: 5601
+          ToPort: 5601
+          CidrIp: 0.0.0.0/0
+          Description: Kibana dashboard access for administrators
+      Tags:
+        - Key: Name
+          Value: CloudShirtMonitoringSecurityGroup
 
 
 Outputs:
@@ -48,3 +101,21 @@ Outputs:
     Value: !Ref WebServerSecurityGroup
     Export:
       Name: !Join [ ":", [ !Ref "AWS::StackName", WebServerSecurityGroup ] ]
+
+  EFSSecurityGroupRef:
+    Description: Reference to the EFS security group.
+    Value: !Ref EFSSecurityGroup
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", EFSSecurityGroup ] ]
+
+  DBSecurityGroupRef:
+    Description: Reference to the RDS database security group.
+    Value: !Ref DBSecurityGroup
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", DBSecurityGroup ] ]
+
+  MonitoringSecurityGroupRef:
+    Description: Reference to the monitoring security group.
+    Value: !Ref MonitoringSecurityGroup
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", MonitoringSecurityGroup ] ]
