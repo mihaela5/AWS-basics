@@ -1,0 +1,89 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudShirt Monitoring Stack - Elastic Stack (Elasticsearch & Kibana v8.x) (REQ-05, REQ-06).
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the monitoring instance is deployed
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet for the Elastic Stack EC2 instance
+
+  MonitoringSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group for Elastic Stack (ports 5601, 9200, 22)
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 KeyPair for SSH administration
+
+Resources:
+  ElasticStackInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+      InstanceType: t3.medium
+      KeyName: !Ref KeyName
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds:
+        - !Ref MonitoringSecurityGroupId
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            DeleteOnTermination: true
+      Tags:
+        - Key: Name
+          Value: CloudShirt-ElasticStack
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+
+          # 1. Import Elastic GPG key and add v8.x repository
+          rpm --import https://artifacts.elastic.co/GPG-KEY-elasticsearch
+
+          cat << 'EOF' > /etc/yum.repos.d/elasticsearch.repo
+          [elasticsearch]
+          name=Elasticsearch repository for 8.x packages
+          baseurl=https://artifacts.elastic.co/packages/8.x/yum
+          gpgcheck=1
+          gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch
+          enabled=1
+          autorefresh=1
+          type=rpm-md
+          EOF
+
+          # 2. Install Elasticsearch and Kibana
+          dnf install -y elasticsearch kibana
+
+          # 3. Configure Elasticsearch for test lab (single-node, bind to all interfaces)
+          cat << 'EOF' >> /etc/elasticsearch/elasticsearch.yml
+          network.host: 0.0.0.0
+          discovery.type: single-node
+          xpack.security.enabled: false
+          xpack.security.enrollment.enabled: false
+          EOF
+
+          # 4. Configure Kibana to bind to all interfaces and point to local Elasticsearch
+          cat << 'EOF' >> /etc/kibana/kibana.yml
+          server.port: 5601
+          server.host: "0.0.0.0"
+          elasticsearch.hosts: ["http://localhost:9200"]
+          EOF
+
+          # 5. Enable and start services
+          systemctl daemon-reload
+          systemctl enable --now elasticsearch
+          systemctl enable --now kibana
+
+Outputs:
+  ElasticsearchPrivateIP:
+    Description: Private IP of Elasticsearch used by Filebeat on Web instances
+    Value: !GetAtt ElasticStackInstance.PrivateIp
+
+  KibanaURL:
+    Description: Kibana Dashboard URL
+    Value: !Sub "http://${ElasticStackInstance.PublicIp}:5601"

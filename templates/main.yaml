@@ -73,7 +73,7 @@ Resources:
         DBPort: !GetAtt DatabaseStack.Outputs.DBPort
         DBUsername: !Ref DBUsername
         DBPassword: !Ref DBPassword
-
+        ElasticsearchPrivateIP: !Ref ElasticsearchPrivateIP
         KeyName: !Ref KeyName
         UserDataScriptUrl: !Ref UserDataScriptUrl
 
@@ -84,6 +84,9 @@ Resources:
       TemplateURL: ./06-monitoring.yaml
       Parameters:
         VpcId: !GetAtt NetworkingStack.Outputs.VPCRef
+        SubnetId: !GetAtt NetworkingStack.Outputs.PublicSubnet1Ref
+        MonitoringSecurityGroupId: !GetAtt SecurityStack.Outputs.MonitoringSecurityGroupRef
+        KeyName: !Ref KeyName
 
   ServerlessStack:
     Type: AWS::CloudFormation::Stack
