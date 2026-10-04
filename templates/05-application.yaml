@@ -1,0 +1,109 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: CloudShirt application running on an EC2 instance connected to EFS and RDS.
+
+
+Parameters:
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC where the CloudShirt application is deployed
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet for the initial CloudShirt EC2 instance
+
+  WebServerSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group used by the CloudShirt web server
+
+  FileSystemId:
+    Type: String
+    Description: EFS filesystem used for CloudShirt logs
+
+  DBEndpoint:
+    Type: String
+    Description: RDS SQL Server endpoint
+
+  DBPort:
+    Type: String
+    Default: "1433"
+    Description: RDS SQL Server port
+
+  DBUsername:
+    Type: String
+    Description: RDS SQL Server username
+    NoEcho: true
+
+  DBPassword:
+    Type: String
+    Description: RDS SQL Server password
+    NoEcho: true
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 KeyPair used for administration
+
+  UserDataScriptUrl:
+    Type: String
+    Description: URL of the CloudShirt EC2 userdata script
+
+
+Resources:
+
+  # Initial EC2 instance used to deploy and test CloudShirt.
+  # The Launch Template and Auto Scaling Group will be added later.
+  CloudShirtInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+
+      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+
+      InstanceType: t3.micro
+
+      KeyName: !Ref KeyName
+
+      SubnetId: !Ref PublicSubnet1
+
+      SecurityGroupIds:
+        - !Ref WebServerSecurityGroupId
+
+      Tags:
+        - Key: Name
+          Value: CloudShirtWebServer
+
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+
+          # Pass CloudFormation parameters to userdata.sh
+          export FILE_SYSTEM_ID="${FileSystemId}"
+          export DB_ENDPOINT="${DBEndpoint}"
+          export DB_PORT="${DBPort}"
+          export DB_USERNAME="${DBUsername}"
+          export DB_PASSWORD="${DBPassword}"
+
+          # Download userdata.sh
+          curl -fsSL "${UserDataScriptUrl}" -o /tmp/userdata.sh
+
+          # Make the script executable
+          chmod +x /tmp/userdata.sh
+
+          # Run the provisioning script
+          /tmp/userdata.sh
+
+
+Outputs:
+
+  InstanceId:
+    Description: ID of the initial CloudShirt EC2 instance
+    Value: !Ref CloudShirtInstance
+
+  PublicIP:
+    Description: Public IP address of the initial CloudShirt EC2 instance
+    Value: !GetAtt CloudShirtInstance.PublicIp
+
+  PublicDNS:
+    Description: Public DNS name of the initial CloudShirt EC2 instance
+    Value: !GetAtt CloudShirtInstance.PublicDnsName

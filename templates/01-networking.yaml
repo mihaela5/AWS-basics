@@ -30,12 +30,12 @@ Parameters:
   AvailabilityZone1:
     Description: Please enter the name of the first Availability Zone.
     Type: String
-    Default: eu-central-1a
+    Default: us-east-1a
 
   AvailabilityZone2:
     Description: Please enter the name of the second Availability Zone.
     Type: String
-    Default: eu-central-1b
+    Default: us-east-1b
 
 
 Resources:
