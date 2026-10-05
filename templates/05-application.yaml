@@ -48,6 +48,10 @@ Parameters:
     Type: String
     Description: URL of the CloudShirt EC2 userdata script
 
+  ElasticsearchPrivateIP:
+    Type: String
+    Description: Private IP address of the Elastic Stack monitoring instance
+
 
 Resources:
 
@@ -83,6 +87,7 @@ Resources:
           export DB_PORT="${DBPort}"
           export DB_USERNAME="${DBUsername}"
           export DB_PASSWORD="${DBPassword}"
+          export ELASTICSEARCH_PRIVATE_IP="${ElasticsearchPrivateIP}"
 
           # Download userdata.sh
           curl -fsSL "${UserDataScriptUrl}" -o /tmp/userdata.sh
