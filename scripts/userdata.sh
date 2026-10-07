@@ -1,83 +1,14 @@
 #!/bin/bash
 set -e
 
+export HOME=/root
+export DOTNET_CLI_HOME=/root
+
 echo "Starting CloudShirt provisioning..."
 
 # Install dependencies
 dnf update -y
 dnf install -y git amazon-efs-utils dotnet-sdk-8.0
-
-echo "Installing and configuring Filebeat..."
-
-# A Filebeat failure must not stop the CloudShirt deployment.
-FILEBEAT_INSTALLED=false
-
-# Add Elastic repository and import GPG key
-rpm --import https://artifacts.elastic.co/GPG-KEY-elasticsearch
-
-cat << 'EOF' > /etc/yum.repos.d/elastic.repo
-[elastic-8.x]
-name=Elastic repository for 8.x packages
-baseurl=https://artifacts.elastic.co/packages/8.x/yum
-gpgcheck=1
-gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch
-enabled=1
-autorefresh=1
-type=rpm-md
-EOF
-
-# Try to install Filebeat
-if dnf install -y filebeat; then
-
-    FILEBEAT_INSTALLED=true
-    echo "Filebeat installed successfully."
-
-# Write configuration to /etc/filebeat/filebeat.yml
-    cat << EOF > /etc/filebeat/filebeat.yml
-filebeat.inputs:
-  # Collect CloudShirt application logs from the mounted EFS directory
-  - type: filestream
-    id: cloudshirt-efs-logs
-    enabled: true
-    paths:
-      - /mnt/cloudshirt-logs/*.log
-    parsers:
-      - ndjson:
-          target: ""
-          overwrite_keys: true
-
-  # Collect systemd / console output logs
-  - type: filestream
-    id: cloudshirt-system-logs
-    enabled: true
-    paths:
-      - /var/log/messages
-
-setup.template.settings:
-  index.number_of_shards: 1
-
-setup.kibana:
-  host: "${ELASTICSEARCH_PRIVATE_IP}:5601"
-
-output.elasticsearch:
-  hosts: ["${ELASTICSEARCH_PRIVATE_IP}:9200"]
-  protocol: "http"
-
-processors:
-  - add_host_metadata:
-      when.not.contains.tags: forwarded
-  - add_cloud_metadata: ~
-EOF
-
-# Set appropriate permissions and start Filebeat
-    chmod 600 /etc/filebeat/filebeat.yml
-
-    echo "Filebeat configured."
-
-else
-    echo "WARNING: Filebeat installation failed."
-    echo "Continuing CloudShirt deployment without Filebeat."
-fi
 
 
 # EFS
@@ -156,7 +87,84 @@ systemctl daemon-reload
 systemctl enable cloudshirt
 systemctl restart cloudshirt
 
+echo "CloudShirt service started."
 
+
+# Install Filebeat AFTER CloudShirt
+echo "Installing and configuring Filebeat..."
+
+# A Filebeat failure must not stop the CloudShirt deployment.
+FILEBEAT_INSTALLED=false
+
+# Add Elastic repository and import GPG key
+rpm --import https://artifacts.elastic.co/GPG-KEY-elasticsearch
+
+cat << 'EOF' > /etc/yum.repos.d/elastic.repo
+[elastic-8.x]
+name=Elastic repository for 8.x packages
+baseurl=https://artifacts.elastic.co/packages/8.x/yum
+gpgcheck=1
+gpgkey=https://artifacts.elastic.co/GPG-KEY-elasticsearch
+enabled=1
+autorefresh=1
+type=rpm-md
+EOF
+
+# Try to install Filebeat
+if dnf install -y filebeat; then
+
+    FILEBEAT_INSTALLED=true
+    echo "Filebeat installed successfully."
+
+    # Write configuration to /etc/filebeat/filebeat.yml
+    cat << EOF > /etc/filebeat/filebeat.yml
+filebeat.inputs:
+  # Collect CloudShirt application logs from the mounted EFS directory
+  - type: filestream
+    id: cloudshirt-efs-logs
+    enabled: true
+    paths:
+      - /mnt/cloudshirt-logs/*.log
+    parsers:
+      - ndjson:
+          target: ""
+          overwrite_keys: true
+
+  # Collect systemd / console output logs
+  - type: filestream
+    id: cloudshirt-system-logs
+    enabled: true
+    paths:
+      - /var/log/messages
+
+setup.template.settings:
+  index.number_of_shards: 1
+
+setup.kibana:
+  host: "${ELASTICSEARCH_PRIVATE_IP}:5601"
+
+output.elasticsearch:
+  hosts: ["${ELASTICSEARCH_PRIVATE_IP}:9200"]
+  protocol: "http"
+
+processors:
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+  - add_cloud_metadata: ~
+EOF
+
+    # Set appropriate permissions
+    chmod 600 /etc/filebeat/filebeat.yml
+
+    echo "Filebeat configured."
+
+else
+    echo "WARNING: Filebeat installation failed."
+    echo "Continuing without Filebeat."
+fi
+
+
+# Start Filebeat only if installed
 if [ "$FILEBEAT_INSTALLED" = true ]; then
 
     echo "Starting Filebeat..."
