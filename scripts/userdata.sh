@@ -9,6 +9,9 @@ dnf install -y git amazon-efs-utils dotnet-sdk-8.0
 
 echo "Installing and configuring Filebeat..."
 
+# A Filebeat failure must not stop the CloudShirt deployment.
+FILEBEAT_INSTALLED=false
+
 # Add Elastic repository and import GPG key
 rpm --import https://artifacts.elastic.co/GPG-KEY-elasticsearch
 
@@ -23,11 +26,14 @@ autorefresh=1
 type=rpm-md
 EOF
 
-# Install Filebeat
-dnf install -y filebeat
+# Try to install Filebeat
+if dnf install -y filebeat; then
+
+    FILEBEAT_INSTALLED=true
+    echo "Filebeat installed successfully."
 
 # Write configuration to /etc/filebeat/filebeat.yml
-cat << EOF > /etc/filebeat/filebeat.yml
+    cat << EOF > /etc/filebeat/filebeat.yml
 filebeat.inputs:
   # Collect CloudShirt application logs from the mounted EFS directory
   - type: filestream
@@ -64,10 +70,16 @@ processors:
 EOF
 
 # Set appropriate permissions and start Filebeat
-chmod 600 /etc/filebeat/filebeat.yml
+    chmod 600 /etc/filebeat/filebeat.yml
 
-echo "Filebeat configured."
- 
+    echo "Filebeat configured."
+
+else
+    echo "WARNING: Filebeat installation failed."
+    echo "Continuing CloudShirt deployment without Filebeat."
+fi
+
+
 # EFS
 mkdir -p /mnt/cloudshirt-logs
 
@@ -78,7 +90,7 @@ if mount -t efs -o tls "${FILE_SYSTEM_ID}:/" /mnt/cloudshirt-logs; then
 
     # Add EFS to fstab only after a successful mount.
     if ! grep -q "${FILE_SYSTEM_ID}:/" /etc/fstab; then
-        echo "${FILE_SYSTEM_ID}:/ /mnt/cloudshirt-logs efs _netdev,tls 0 0" >> /etc/fstab
+        echo "${FILE_SYSTEM_ID}:/ /mnt/cloudshirt-logs efs _netdev,tls,nofail 0 0" >> /etc/fstab
     fi
 else
     echo "WARNING: EFS mount failed. Continuing CloudShirt deployment."
@@ -143,7 +155,19 @@ EOF
 systemctl daemon-reload
 systemctl enable cloudshirt
 systemctl restart cloudshirt
-systemctl enable filebeat
-systemctl restart filebeat
+
+
+if [ "$FILEBEAT_INSTALLED" = true ]; then
+
+    echo "Starting Filebeat..."
+
+    systemctl enable filebeat
+    systemctl restart filebeat
+
+else
+
+    echo "Skipping Filebeat service because Filebeat was not installed."
+
+fi
 
 echo "CloudShirt provisioning completed successfully."
