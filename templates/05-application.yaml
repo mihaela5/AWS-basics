@@ -13,9 +13,17 @@ Parameters:
     Type: AWS::EC2::Subnet::Id
     Description: Public subnet for the initial CloudShirt EC2 instance
 
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second public subnet used by the Application Load Balancer
+
   WebServerSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
     Description: Security group used by the CloudShirt web server
+
+  LoadBalancerSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group used by the Application Load Balancer
 
   FileSystemId:
     Type: String
@@ -99,6 +107,68 @@ Resources:
           /tmp/userdata.sh
 
 
+  # Application Load Balancer spanning both public subnets.
+  CloudShirtLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: CloudShirtALB
+      Scheme: internet-facing
+      Type: application
+
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroupId
+
+      Tags:
+        - Key: Name
+          Value: CloudShirtALB
+
+
+  # Target group forwards HTTP traffic from the ALB to CloudShirt.
+  CloudShirtTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: CloudShirtTargetGroup
+
+      VpcId: !Ref VpcId
+
+      Protocol: HTTP
+      Port: 80
+
+      TargetType: instance
+
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: traffic-port
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+
+      Targets:
+        - Id: !Ref CloudShirtInstance
+          Port: 80
+
+
+  # Listener accepts HTTP requests on port 80 and forwards them
+  # to the CloudShirt target group.
+  CloudShirtListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+
+      LoadBalancerArn: !Ref CloudShirtLoadBalancer
+
+      Protocol: HTTP
+      Port: 80
+
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref CloudShirtTargetGroup
+
+
 Outputs:
 
   InstanceId:
@@ -112,3 +182,11 @@ Outputs:
   PublicDNS:
     Description: Public DNS name of the initial CloudShirt EC2 instance
     Value: !GetAtt CloudShirtInstance.PublicDnsName
+
+  LoadBalancerDNS:
+    Description: DNS name used to access the CloudShirt application
+    Value: !GetAtt CloudShirtLoadBalancer.DNSName
+
+  TargetGroupArn:
+    Description: ARN of the CloudShirt target group
+    Value: !Ref CloudShirtTargetGroup
