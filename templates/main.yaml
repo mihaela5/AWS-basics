@@ -61,19 +61,21 @@ Resources:
 
   ApplicationStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: [NetworkingStack, SecurityStack, StorageStack, DatabaseStack]
+    DependsOn: [NetworkingStack, SecurityStack, StorageStack, DatabaseStack, MonitoringStack]
     Properties:
       TemplateURL: ./05-application.yaml
       Parameters:
         VpcId: !GetAtt NetworkingStack.Outputs.VPCRef
         PublicSubnet1: !GetAtt NetworkingStack.Outputs.PublicSubnet1Ref
+        PublicSubnet2: !GetAtt NetworkingStack.Outputs.PublicSubnet2Ref
         WebServerSecurityGroupId: !GetAtt SecurityStack.Outputs.WebServerSecurityGroupRef
+        LoadBalancerSecurityGroupId: !GetAtt SecurityStack.Outputs.LoadBalancerSecurityGroupRef
         FileSystemId: !GetAtt StorageStack.Outputs.FileSystemId
         DBEndpoint: !GetAtt DatabaseStack.Outputs.DBEndpoint
         DBPort: !GetAtt DatabaseStack.Outputs.DBPort
         DBUsername: !Ref DBUsername
         DBPassword: !Ref DBPassword
-        ElasticsearchPrivateIP: !Ref ElasticsearchPrivateIP
+        ElasticsearchPrivateIP: !GetAtt MonitoringStack.Outputs.ElasticsearchPrivateIP
         KeyName: !Ref KeyName
         UserDataScriptUrl: !Ref UserDataScriptUrl
 
