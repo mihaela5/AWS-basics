@@ -11,15 +11,15 @@ Parameters:
 
   PublicSubnet1:
     Type: AWS::EC2::Subnet::Id
-    Description: Public subnet for the initial CloudShirt EC2 instance
+    Description: First public subnet for application instances and ALB
 
   PublicSubnet2:
     Type: AWS::EC2::Subnet::Id
-    Description: Second public subnet used by the Application Load Balancer
+    Description: Second public subnet for application instances and ALB
 
   WebServerSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
-    Description: Security group used by the CloudShirt web server
+    Description: Security group used by the CloudShirt web servers
 
   LoadBalancerSecurityGroupId:
     Type: AWS::EC2::SecurityGroup::Id
@@ -63,56 +63,52 @@ Parameters:
 
 Resources:
 
-  # Initial EC2 instance used to deploy and test CloudShirt.
-  # The Launch Template and Auto Scaling Group will be added later.
-  CloudShirtInstance:
-    Type: AWS::EC2::Instance
+  # Launch Template used by the Auto Scaling Group to create
+  # CloudShirt application instances.
+  CloudShirtLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
     Properties:
+      LaunchTemplateName: CloudShirtLaunchTemplate
 
-      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+      LaunchTemplateData:
+        ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+        InstanceType: t3.micro
+        KeyName: !Ref KeyName
 
-      InstanceType: t3.micro
+        SecurityGroupIds:
+          - !Ref WebServerSecurityGroupId
 
-      KeyName: !Ref KeyName
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -e
 
-      SubnetId: !Ref PublicSubnet1
+            export FILE_SYSTEM_ID="${FileSystemId}"
+            export DB_ENDPOINT="${DBEndpoint}"
+            export DB_PORT="${DBPort}"
+            export DB_USERNAME="${DBUsername}"
+            export DB_PASSWORD="${DBPassword}"
+            export ELASTICSEARCH_PRIVATE_IP="${ElasticsearchPrivateIP}"
 
-      SecurityGroupIds:
-        - !Ref WebServerSecurityGroupId
+            curl -fsSL "${UserDataScriptUrl}" -o /tmp/userdata.sh
+            chmod +x /tmp/userdata.sh
+            /tmp/userdata.sh
 
-      Tags:
-        - Key: Name
-          Value: CloudShirtWebServer
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: CloudShirtWebServer
 
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -e
-
-          # Pass CloudFormation parameters to userdata.sh
-          export FILE_SYSTEM_ID="${FileSystemId}"
-          export DB_ENDPOINT="${DBEndpoint}"
-          export DB_PORT="${DBPort}"
-          export DB_USERNAME="${DBUsername}"
-          export DB_PASSWORD="${DBPassword}"
-          export ELASTICSEARCH_PRIVATE_IP="${ElasticsearchPrivateIP}"
-
-          # Download userdata.sh
-          curl -fsSL "${UserDataScriptUrl}" -o /tmp/userdata.sh
-
-          # Make the script executable
-          chmod +x /tmp/userdata.sh
-
-          # Run the provisioning script
-          /tmp/userdata.sh
-
-
-  # Application Load Balancer spanning both public subnets.
+  # 2. Application Load Balancer
+  # Distributes incoming HTTP traffic across both availability zones.
   CloudShirtLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
       Name: CloudShirtALB
+
       Scheme: internet-facing
+
       Type: application
 
       Subnets:
@@ -125,9 +121,7 @@ Resources:
       Tags:
         - Key: Name
           Value: CloudShirtALB
-
-
-  # Target group forwards HTTP traffic from the ALB to CloudShirt.
+ # Target group forwards HTTP traffic from the ALB to CloudShirt.
   CloudShirtTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
@@ -148,13 +142,8 @@ Resources:
       HealthyThresholdCount: 2
       UnhealthyThresholdCount: 2
 
-      Targets:
-        - Id: !Ref CloudShirtInstance
-          Port: 80
-
-
-  # Listener accepts HTTP requests on port 80 and forwards them
-  # to the CloudShirt target group.
+  # 4. HTTP Listener
+  # Forwards requests from the ALB to the target group.
   CloudShirtListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
@@ -168,20 +157,61 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref CloudShirtTargetGroup
 
+  # 5. Auto Scaling Group
+  # Maintains at least two instances across two availability zones.
+  CloudShirtAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      MinSize: "2"
+      MaxSize: "4"
+      DesiredCapacity: "2"
+
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+
+      LaunchTemplate:
+        LaunchTemplateId: !Ref CloudShirtLaunchTemplate
+        Version: !GetAtt CloudShirtLaunchTemplate.LatestVersionNumber
+
+      TargetGroupARNs:
+        - !Ref CloudShirtTargetGroup
+
+      HealthCheckType: ELB
+      HealthCheckGracePeriod: 600
+
+      Tags:
+        - Key: Name
+          Value: CloudShirtWebServer
+          PropagateAtLaunch: true
+
+  # 6. Scheduled Scale-Out
+  # Increase desired capacity to four instances at 18:00 Eastern Time.
+  CloudShirtScaleOut:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref CloudShirtAutoScalingGroup
+      Recurrence: "0 18 * * *"
+      TimeZone: America/New_York
+
+      MinSize: "2"
+      MaxSize: "4"
+      DesiredCapacity: "4"
+
+  # 7. Scheduled Scale-In
+  # Return to two instances at 20:00 Eastern Time.
+  CloudShirtScaleIn:
+    Type: AWS::AutoScaling::ScheduledAction
+    Properties:
+      AutoScalingGroupName: !Ref CloudShirtAutoScalingGroup
+      Recurrence: "0 20 * * *"
+      TimeZone: America/New_York
+
+      MinSize: "2"
+      MaxSize: "4"
+      DesiredCapacity: "2"
 
 Outputs:
-
-  InstanceId:
-    Description: ID of the initial CloudShirt EC2 instance
-    Value: !Ref CloudShirtInstance
-
-  PublicIP:
-    Description: Public IP address of the initial CloudShirt EC2 instance
-    Value: !GetAtt CloudShirtInstance.PublicIp
-
-  PublicDNS:
-    Description: Public DNS name of the initial CloudShirt EC2 instance
-    Value: !GetAtt CloudShirtInstance.PublicDnsName
 
   LoadBalancerDNS:
     Description: DNS name used to access the CloudShirt application
@@ -190,3 +220,11 @@ Outputs:
   TargetGroupArn:
     Description: ARN of the CloudShirt target group
     Value: !Ref CloudShirtTargetGroup
+
+  LaunchTemplateId:
+    Description: ID of the CloudShirt EC2 Launch Template
+    Value: !Ref CloudShirtLaunchTemplate
+
+  AutoScalingGroupName:
+    Description: Name of the CloudShirt Auto Scaling Group
+    Value: !Ref CloudShirtAutoScalingGroup
