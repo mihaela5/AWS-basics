@@ -8,7 +8,7 @@ echo "Starting CloudShirt provisioning..."
 
 # Install dependencies
 dnf update -y
-dnf install -y git amazon-efs-utils dotnet-sdk-8.0
+dnf install -y git amazon-efs-utils dotnet-sdk-8.0 logrotate
 
 
 # EFS
@@ -26,6 +26,11 @@ if mount -t efs -o tls "${FILE_SYSTEM_ID}:/" /mnt/cloudshirt-logs; then
 else
     echo "WARNING: EFS mount failed. Continuing CloudShirt deployment."
 fi
+
+# Each instance writes its logs to its own directory on the shared EFS.
+# One shared log file would interleave the output of all instances and make
+# every instance's log rotation fight over the same file.
+INSTANCE_NAME="$(hostname -s 2>/dev/null || uname -n)"
 
  
 # Download CloudShirt
@@ -56,21 +61,40 @@ dotnet publish \
     -o /opt/cloudshirt/release
 
  
+# Wrapper that appends the application output to the log file on EFS.
+# It keeps the logs of every instance in its own directory, because all
+# instances share the same EFS filesystem.
+cat > /opt/cloudshirt/run.sh <<'EOF'
+#!/bin/bash
+LOG_DIR="/mnt/cloudshirt-logs/$(hostname -s 2>/dev/null || uname -n)"
+
+if ! mountpoint -q /mnt/cloudshirt-logs; then
+    echo "WARNING: /mnt/cloudshirt-logs is not mounted; writing logs to local disk." >&2
+fi
+
+mkdir -p "$LOG_DIR"
+exec /usr/bin/dotnet /opt/cloudshirt/release/Web.dll >> "$LOG_DIR/app.log" 2>&1
+EOF
+
+chmod +x /opt/cloudshirt/run.sh
+
 # Create systemd service
 cat > /etc/systemd/system/cloudshirt.service <<'EOF'
 [Unit]
 Description=CloudShirt ASP.NET Core Application
-After=network.target
+# Wait for the EFS mount from fstab so the log directory is really the EFS
+# filesystem. A failed mount does not block the application: availability
+# wins over logging.
+After=network.target remote-fs.target
 
 [Service]
 WorkingDirectory=/opt/cloudshirt/release
-ExecStart=/usr/bin/dotnet /opt/cloudshirt/release/Web.dll
+ExecStart=/opt/cloudshirt/run.sh
 
 Restart=always
 RestartSec=10
 
 KillSignal=SIGINT
-SyslogIdentifier=cloudshirt
 
 User=root
 
@@ -88,6 +112,36 @@ systemctl enable cloudshirt
 systemctl restart cloudshirt
 
 echo "CloudShirt service started."
+
+
+# Rotate the application log daily on EFS (REQ-03: log files stored on a
+# daily basis). logrotate renames the current log file to app.log-YYYY-MM-DD
+# and creates a new app.log; the service restart lets the application reopen it.
+# dateyesterday names the file after the day the logs were written, because
+# rotation runs shortly after midnight.
+cat > /etc/logrotate.d/cloudshirt << EOF
+/mnt/cloudshirt-logs/${INSTANCE_NAME}/app.log {
+    daily
+    dateext
+    dateyesterday
+    dateformat -%Y-%m-%d
+    rotate 7
+    missingok
+    notifempty
+    create 0644 root root
+
+    postrotate
+        systemctl restart cloudshirt.service
+    endscript
+}
+EOF
+
+# On Amazon Linux 2023 logrotate is triggered by a systemd timer.
+if systemctl cat logrotate.timer >/dev/null 2>&1; then
+    systemctl enable --now logrotate.timer
+else
+    echo "WARNING: logrotate.timer not found; verify that daily log rotation is triggered."
+fi
 
 
 # Install Filebeat AFTER CloudShirt
@@ -119,18 +173,16 @@ if dnf install -y filebeat; then
     # Write configuration to /etc/filebeat/filebeat.yml
     cat << EOF > /etc/filebeat/filebeat.yml
 filebeat.inputs:
-  # Collect CloudShirt application logs from the mounted EFS directory
+  # Collect the application logs of this instance from the mounted EFS directory.
+  # Only the instance's own directory is read: all instances see the complete
+  # shared EFS, so reading every directory would index each line multiple times.
   - type: filestream
     id: cloudshirt-efs-logs
     enabled: true
     paths:
-      - /mnt/cloudshirt-logs/*.log
-    parsers:
-      - ndjson:
-          target: ""
-          overwrite_keys: true
+      - /mnt/cloudshirt-logs/${INSTANCE_NAME}/app.log*
 
-  # Collect systemd / console output logs
+  # Collect system logs
   - type: filestream
     id: cloudshirt-system-logs
     enabled: true
