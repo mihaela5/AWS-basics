@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudWatch monitoring for CloudShirt - alarms, SNS notifications and dashboard.
+
+Parameters:
+  AutoScalingGroupName:
+    Type: String
+    Description: Name of the Auto Scaling Group to monitor
+
+  LoadBalancerFullName:
+    Type: String
+    Description: Full name of the Application Load Balancer (app/<name>/<id>)
+
+  TargetGroupFullName:
+    Type: String
+    Description: Full name of the target group (targetgroup/<name>/<id>)
+
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: Email address that receives CloudWatch alarm notifications (optional)
+
+Conditions:
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
+
+Resources:
+
+  # SNS topic every alarm publishes to. The email subscription only exists
+  # when AlarmEmail is set, because an empty endpoint is invalid.
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: CloudShirt-Alarms
+      Subscription: !If
+        - HasAlarmEmail
+        - - Protocol: email
+            Endpoint: !Ref AlarmEmail
+        - !Ref AWS::NoValue
+
+  # Average CPU across the ASG above 70% for two consecutive 5-minute periods.
+  CloudShirtHighCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: CloudShirt-HighCPU
+      AlarmDescription: Average CPU across the CloudShirt ASG above 70% for 10 minutes
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref AutoScalingGroupName
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 70
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  # Fires as soon as a single target fails its ALB health checks.
+  CloudShirtALBUnhealthyHostAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: CloudShirt-ALB-Unhealthy-Host
+      AlarmDescription: One or more CloudShirt targets are failing ALB health checks
+      Namespace: AWS/ApplicationELB
+      MetricName: UnHealthyHostCount
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Ref LoadBalancerFullName
+        - Name: TargetGroup
+          Value: !Ref TargetGroupFullName
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !Ref AlarmTopic
+
+  CloudShirtDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: CloudShirt-Overview
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "ASG CPU utilisation",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stat": "Average",
+                "period": 300,
+                "metrics": [
+                  [ "AWS/EC2", "CPUUtilization", "AutoScalingGroupName", "${AutoScalingGroupName}" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "ALB request count",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  [ "AWS/ApplicationELB", "RequestCount", "LoadBalancer", "${LoadBalancerFullName}" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "ALB target response time",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stat": "Average",
+                "period": 300,
+                "metrics": [
+                  [ "AWS/ApplicationELB", "TargetResponseTime", "LoadBalancer", "${LoadBalancerFullName}" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "Healthy vs unhealthy targets",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stat": "Maximum",
+                "period": 300,
+                "metrics": [
+                  [ "AWS/ApplicationELB", "HealthyHostCount", "LoadBalancer", "${LoadBalancerFullName}", "TargetGroup", "${TargetGroupFullName}" ],
+                  [ "AWS/ApplicationELB", "UnHealthyHostCount", "LoadBalancer", "${LoadBalancerFullName}", "TargetGroup", "${TargetGroupFullName}" ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 12, "width": 24, "height": 6,
+              "properties": {
+                "title": "ALB 5XX errors",
+                "region": "${AWS::Region}",
+                "view": "timeSeries",
+                "stat": "Sum",
+                "period": 300,
+                "metrics": [
+                  [ "AWS/ApplicationELB", "HTTPCode_ELB_5XX_Count", "LoadBalancer", "${LoadBalancerFullName}" ],
+                  [ "AWS/ApplicationELB", "HTTPCode_Target_5XX_Count", "LoadBalancer", "${LoadBalancerFullName}" ]
+                ]
+              }
+            }
+          ]
+        }
+
+Outputs:
+  AlarmTopicArn:
+    Description: SNS topic that the CloudWatch alarms publish to
+    Value: !Ref AlarmTopic
+
+  CloudShirtDashboardOutput:
+    Description: Name of the CloudWatch dashboard
+    Value: !Ref CloudShirtDashboard
