@@ -22,6 +22,11 @@ Parameters:
     Type: String
     Description: URL of the CloudShirt EC2 userdata script
 
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: Email address that receives CloudWatch alarm notifications (optional)
+
 Resources:
     # 1. Base Networking (VPCs, Subnets across AZ A & AZ B, Route Tables)
   NetworkingStack:
@@ -98,6 +103,17 @@ Resources:
       Parameters:
         VpcId: !GetAtt NetworkingStack.Outputs.VPCRef
 
+  CloudwatchStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: ApplicationStack
+    Properties:
+      TemplateURL: ./08-cloudwatch.yaml
+      Parameters:
+        AutoScalingGroupName: !GetAtt ApplicationStack.Outputs.AutoScalingGroupName
+        LoadBalancerFullName: !GetAtt ApplicationStack.Outputs.LoadBalancerFullName
+        TargetGroupFullName: !GetAtt ApplicationStack.Outputs.TargetGroupFullName
+        AlarmEmail: !Ref AlarmEmail
+
 Outputs:
   NetworkingStackOutput:
     Description: "Networking Stack ID"
@@ -126,3 +142,7 @@ Outputs:
   ServerlessStackOutput:
     Description: "Serverless Stack ID"
     Value: !Ref ServerlessStack
+
+  CloudwatchStackOutput:
+    Description: "Cloudwatch Stack ID"
+    Value: !Ref CloudwatchStack
