@@ -228,3 +228,11 @@ Outputs:
   AutoScalingGroupName:
     Description: Name of the CloudShirt Auto Scaling Group
     Value: !Ref CloudShirtAutoScalingGroup
+
+  LoadBalancerFullName:
+    Description: Full name of the CloudShirt Load Balancer
+    Value: !GetAtt CloudShirtLoadBalancer.LoadBalancerFullName
+
+  TargetGroupFullName:
+    Description: Full name of the CloudShirt Target Group
+    Value: !GetAtt CloudShirtTargetGroup.TargetGroupFullName
