@@ -24,7 +24,7 @@ Cloud infrastructure and AWS services: The solution uses AWS services including 
 
 **Databases:** Amazon RDS for SQL Server provides a managed relational database for the application.
 
-**Monitoring and logging:** Elasticsearch and Kibana provide a monitoring and log-analysis environment. Filebeat is configured to forward logs to Elasticsearch.
+**Monitoring and logging:** Elasticsearch and Kibana provide a monitoring and log-analysis environment. Filebeat is configured to forward logs to Elasticsearch. Amazon CloudWatch complements this with metric alarms for the Auto Scaling Group and the load balancer, SNS notifications, and a dashboard.
 
 **Automation and serverless computing:** UserData automates EC2 instance configuration, while a separate CloudFormation template, `07-serverless.yaml`, is included for the serverless part of the solution.
 
@@ -58,9 +58,24 @@ The infrastructure is separated into the following templates:
 
 `07-serverless.yaml` — serverless resources.
 
+`08-cloudwatch.yaml` — CloudWatch alarms, SNS notifications, and the CloudWatch dashboard.
+
 `main.yaml` — master template that orchestrates the nested stacks.
 
 The `scripts/userdata.sh` script installs the required dependencies, mounts EFS, configures the application database connection, publishes the .NET application, creates a systemd service, and attempts to configure Filebeat.
+
+### CloudWatch monitoring
+
+`08-cloudwatch.yaml` is deployed by `main.yaml` as the `CloudwatchStack` nested stack. It depends on the application stack and receives the Auto Scaling Group name, the load balancer full name (`app/<name>/<id>`) and the target group full name (`targetgroup/<name>/<id>`) from it. The optional `AlarmEmail` parameter is declared on the root stack and forwarded to the CloudWatch stack.
+
+| Resource | Purpose |
+| -------- | ------- |
+| `AlarmTopic` | Amazon SNS topic `CloudShirt-Alarms` that every alarm publishes to. The email subscription is created only when `AlarmEmail` is set, because an empty endpoint is not valid. |
+| `CloudShirtHighCpuAlarm` | Alarm `CloudShirt-HighCPU`. Fires when the average `CPUUtilization` of the Auto Scaling Group is above 70% for two consecutive 5-minute periods. |
+| `CloudShirtALBUnhealthyHostAlarm` | Alarm `CloudShirt-ALB-Unhealthy-Host`. Fires when the maximum `UnHealthyHostCount` of the target group reaches one, so a single target failing its ALB health checks is reported. |
+| `CloudShirtDashboard` | CloudWatch dashboard `CloudShirt-Overview` with widgets for ASG CPU utilisation, ALB request count, ALB target response time, healthy vs. unhealthy targets, and ALB 5XX errors. |
+
+Both alarms set `TreatMissingData` to `notBreaching`, so a period without metric data does not raise a false alarm. The stack outputs `AlarmTopicArn`, the SNS topic that the alarms publish to, and `CloudShirtDashboardOutput`, the name of the dashboard.
 
 ## Justification of choices 
 
@@ -72,10 +87,12 @@ The `scripts/userdata.sh` script installs the required dependencies, mounts EFS,
 
 3. **Deploy the infrastructure.** Run the provided provisioning script, scripts/provision.sh, to package the templates and create or update the master CloudFormation stack.
 
+4. **Verify the monitoring setup (optional).** If an alarm email address was provided, confirm the subscription from the message that Amazon SNS sends, then open the `CloudShirt-Overview` dashboard and the two CloudWatch alarms to check that metrics are being collected.
+
 ## Recommmendations 
 
 ## Conclusion 
 
-The project defines a modular AWS infrastructure for the CloudShirt application using CloudFormation. The application tier is designed to support high availability across two Availability Zones and scheduled scaling between 18:00 and 20:00 Eastern Time. The solution also provisions EFS, RDS, an Elastic Stack monitoring environment, and a separate serverless stack.
+The project defines a modular AWS infrastructure for the CloudShirt application using CloudFormation. The application tier is designed to support high availability across two Availability Zones and scheduled scaling between 18:00 and 20:00 Eastern Time. The solution also provisions EFS, RDS, an Elastic Stack monitoring environment, a CloudWatch stack with alarms, SNS notifications and a dashboard, and a separate serverless stack.
 
-The configuration addresses the main infrastructure requirements, but some capabilities must be confirmed through deployment and testing. In particular, successful Filebeat log delivery, daily log rotation, the scripted RDS order export, and the exact serverless functionality require verification before the project can be reported as fully complete.
+The configuration addresses the main infrastructure requirements, but some capabilities must be confirmed through deployment and testing. In particular, successful Filebeat log delivery, daily log rotation, the scripted RDS order export, the confirmation of the SNS alarm subscription, and the exact serverless functionality require verification before the project can be reported as fully complete.
