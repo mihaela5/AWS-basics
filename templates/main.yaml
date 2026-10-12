@@ -97,11 +97,13 @@ Resources:
 
   ServerlessStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: NetworkingStack
+    DependsOn: [NetworkingStack, StorageStack]
     Properties:
       TemplateURL: ./07-serverless.yaml
       Parameters:
-        VpcId: !GetAtt NetworkingStack.Outputs.VPCRef
+        OrderExportBucketName: !GetAtt StorageStack.Outputs.S3BucketName
+        OrderExportBucketArn: !GetAtt StorageStack.Outputs.S3BucketArn
+        DeploymentVersion: "1"
 
   CloudwatchStack:
     Type: AWS::CloudFormation::Stack
@@ -146,3 +148,11 @@ Outputs:
   CloudwatchStackOutput:
     Description: "Cloudwatch Stack ID"
     Value: !Ref CloudwatchStack
+
+  OrderInsightsApiEndpoint:
+    Description: "Invoke URL of the CloudShirt order insights API"
+    Value: !GetAtt ServerlessStack.Outputs.ApiEndpoint
+
+  OrderExportBucketName:
+    Description: "S3 bucket holding the order exports"
+    Value: !GetAtt StorageStack.Outputs.S3BucketName

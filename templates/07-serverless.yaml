@@ -1,0 +1,145 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Serverless Layer - CloudShirt order insights API over the S3 order exports (REQ-08).
+
+Parameters:
+  OrderExportBucketName:
+    Type: String
+    Description: S3 bucket that holds the order exports written by the REQ-07 export script
+
+  OrderExportBucketArn:
+    Type: String
+    Description: ARN of the same bucket, used to scope the Lambda read policy
+
+  DeploymentVersion:
+    Type: String
+    Default: "1"
+    Description: >
+      Bump this to force API Gateway to create a new deployment. CloudFormation
+      does not redeploy the API when only the Lambda code changes, so a new
+      route would otherwise never go live.
+
+Resources:
+
+  InsightsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/CloudShirt-OrderInsights
+      RetentionInDays: 14
+
+  # Read-only access to the exports, and nowhere else in the bucket.
+  InsightsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CloudShirt-OrderInsightsRole
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CloudShirt-OrderInsightsPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Ref OrderExportBucketArn
+                Condition:
+                  StringLike:
+                    s3:prefix: exports/orders/*
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${OrderExportBucketArn}/exports/orders/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt InsightsLogGroup.Arn
+
+  OrderInsightsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: CloudShirt-OrderInsights
+      Description: Summarises CloudShirt order exports for staff
+      Runtime: python3.12
+      Handler: insights.handler
+      Role: !GetAtt InsightsRole.Arn
+      # Relative path: `aws cloudformation package` zips this folder and
+      # rewrites the property to an S3 location.
+      Code: ../lambda/order_insights
+      MemorySize: 256
+      Timeout: 30
+      Environment:
+        Variables:
+          ORDER_EXPORT_BUCKET: !Ref OrderExportBucketName
+      Tags:
+        - Key: Name
+          Value: CloudShirt-OrderInsights
+
+  Api:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: CloudShirt-Order-Insights
+      Description: Order export insights for CloudShirt staff
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # One greedy resource; the handler does the routing.
+  ApiProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref Api
+      ParentId: !GetAtt Api.RootResourceId
+      PathPart: "{proxy+}"
+
+  ApiProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref Api
+      ResourceId: !Ref ApiProxyResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderInsightsFunction.Arn}/invocations"
+
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: ApiProxyMethod
+    Properties:
+      RestApiId: !Ref Api
+      Description: !Sub "Deployment ${DeploymentVersion} for ${AWS::StackName}"
+
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref Api
+      DeploymentId: !Ref ApiDeployment
+      StageName: prod
+      MethodSettings:
+        - HttpMethod: "*"
+          ResourcePath: "/*"
+          ThrottlingRateLimit: 20
+          ThrottlingBurstLimit: 40
+          MetricsEnabled: true
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref OrderInsightsFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${Api}/*/*"
+
+Outputs:
+  ApiEndpoint:
+    Description: Invoke URL of the CloudShirt order insights API
+    Value: !Sub "https://${Api}.execute-api.${AWS::Region}.amazonaws.com/prod/"
+
+  OrderInsightsFunctionName:
+    Description: Name of the order insights Lambda
+    Value: !Ref OrderInsightsFunction

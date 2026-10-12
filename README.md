@@ -56,3 +56,49 @@ bash scripts/provision.sh --delete
 ```
 
 The script validates the AWS CLI and credentials, creates the staging bucket if needed, packages the nested templates, deploys (or updates) the `CloudShirtInfrastructure` stack, and prints the outputs of the root stack and all nested stacks. Region resolution: `--region` / `-Region` → `AWS_REGION` → `AWS_DEFAULT_REGION` → AWS CLI configuration → `eu-central-1` (matching the availability-zone defaults in `templates/01-networking.yaml`).
+
+---
+
+## 5. Serverless order insights API
+
+`templates/07-serverless.yaml` provisions a Lambda function behind an API Gateway REST API. It reads the order exports that `scripts/export.sh` writes under the `exports/orders/` prefix of the S3 bucket and returns summaries to the caller. It is deployed as part of the root stack, so it needs no separate step.
+
+Read the invoke URL and the bucket name from the root stack outputs:
+
+```bash
+export API="$(aws cloudformation describe-stacks \
+  --stack-name CloudShirtInfrastructure \
+  --region $AWS_REGION \
+  --query "Stacks[0].Outputs[?OutputKey=='OrderInsightsApiEndpoint'].OutputValue" \
+  --output text)"
+
+export EXPORT_BUCKET="$(aws cloudformation describe-stacks \
+  --stack-name CloudShirtInfrastructure \
+  --region $AWS_REGION \
+  --query "Stacks[0].Outputs[?OutputKey=='OrderExportBucketName'].OutputValue" \
+  --output text)"
+```
+
+The API serves four read-only routes:
+
+* `GET /health` — service liveness and the bucket the function reads.
+* `GET /exports` — every CSV file under the `exports/orders/` prefix, each with an `id`.
+* `GET /exports/{id}` — a summary of one export, for example `/exports/20261012_223600`.
+* `GET /summary` — totals and a per-export series across all exports.
+
+```bash
+curl "${API}health"
+curl "${API}exports"
+curl "${API}summary"
+```
+
+To test it, copy an export into the bucket:
+
+```bash
+aws s3 cp orders.csv "s3://${EXPORT_BUCKET}/exports/orders/orders_20261012_223600.csv"
+curl "${API}exports/20261012_223600"
+```
+
+Any CSV with an order-number column works. The function matches the remaining columns by name, accepting the common spellings an export is likely to use, and reports the metrics it could not compute under `unavailableMetrics` instead of failing.
+
+The function reads the exports from S3.
