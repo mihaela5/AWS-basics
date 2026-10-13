@@ -10,7 +10,7 @@ The main objectives are to provide high availability, support scheduled scaling,
 ## Learning objectives 
 The assignment requires the solution to cover the nine learning objectives described in the course manual. The following points describe the AWS concepts used in the project. They should be matched with the exact learning-objective wording in the course manual before submission.
 
-Cloud infrastructure and AWS services: The solution uses AWS services including EC2, VPC, Elastic Load Balancing, EFS, RDS, S3, and CloudFormation.
+Cloud infrastructure and AWS services: The solution uses AWS services including EC2, VPC, Elastic Load Balancing, EFS, RDS, S3, AWS Lambda, API Gateway, and CloudFormation.
 
 **Networking:** A VPC provides an isolated network environment. Public and private subnets are configured across two Availability Zones, with routing and security groups controlling access.
 
@@ -26,7 +26,7 @@ Cloud infrastructure and AWS services: The solution uses AWS services including 
 
 **Monitoring and logging:** Elasticsearch and Kibana provide a monitoring and log-analysis environment. Filebeat is configured to forward logs to Elasticsearch. Amazon CloudWatch complements this with metric alarms for the Auto Scaling Group and the load balancer, SNS notifications, and a dashboard.
 
-**Automation and serverless computing:** UserData automates EC2 instance configuration, while a separate CloudFormation template, `07-serverless.yaml`, is included for the serverless part of the solution.
+**Automation and serverless computing:** UserData automates EC2 instance configuration, while `07-serverless.yaml` provisions an AWS Lambda function and an API Gateway REST API that serve summaries of the exported order data. The function runs without a server to manage and is billed only when it is invoked.
 
 
 ## Requirements 
@@ -40,6 +40,7 @@ Cloud infrastructure and AWS services: The solution uses AWS services including 
 | REQ-05 |  The `06-monitoring.yaml` template provisions an Elastic Stack monitoring instance with Elasticsearch and Kibana v8.x. Elasticsearch receives log data, while Kibana provides a web interface for searching and analysing it. The deployed services and access to the dashboard should be tested.   |
 | REQ-06    | The UserData script attempts to install Filebeat on each application instance and configures it to collect files from `/mnt/cloudshirt-logs/*.log` and system logs from `/var/log/messages`. Filebeat is configured to send data to Elasticsearch. The script allows the application setup to continue if Filebeat installation fails.  |
 |REQ-07 |A script is used to export the order data from the RDS database and store the exported data in an Amazon S3 bucket. This provides a scripted way of transferring database order information to durable object storage|
+|REQ-08 |The `07-serverless.yaml` template provisions an AWS Lambda function exposed through an API Gateway REST API. The function summarises the order exports that the REQ-07 script writes to the `exports/orders/` prefix in Amazon S3 and returns them over four read-only routes, so staff can see order totals, buyer counts and, where the export carries prices, unit counts and best-selling products without opening the database. The function is provisioned entirely through CloudFormation and uses an IAM role that can only list and read that prefix. |
 
 ### IaC
 The infrastructure is separated into the following templates:
@@ -56,7 +57,7 @@ The infrastructure is separated into the following templates:
 
 `06-monitoring.yaml` — Elastic Stack monitoring instance.
 
-`07-serverless.yaml` — serverless resources.
+`07-serverless.yaml` — serverless order insights API, an AWS Lambda function exposed through API Gateway.
 
 `08-cloudwatch.yaml` — CloudWatch alarms, SNS notifications, and the CloudWatch dashboard.
 
@@ -77,6 +78,34 @@ The `scripts/userdata.sh` script installs the required dependencies, mounts EFS,
 
 Both alarms set `TreatMissingData` to `notBreaching`, so a period without metric data does not raise a false alarm. The stack outputs `AlarmTopicArn`, the SNS topic that the alarms publish to, and `CloudShirtDashboardOutput`, the name of the dashboard.
 
+### Serverless component
+
+`07-serverless.yaml` is deployed by `main.yaml` as the `ServerlessStack` nested stack. It depends on the storage stack and receives the export bucket name and its ARN from it, so the Lambda reads the same bucket that the REQ-07 export script writes to. The `DeploymentVersion` parameter is declared on the root stack and forwarded to the serverless stack.
+
+The function reads the order exports from Amazon S3 instead of querying Amazon RDS directly. This keeps the component independent of the database: the CloudShirt application seeds data at startup but never applies EF Core migrations, so the schema is created out of band. Reading the exports also means the endpoint still works during the period when the database has no tables.
+
+| Resource | Purpose |
+| -------- | ------- |
+| `InsightsLogGroup` | CloudWatch log group `/aws/lambda/CloudShirt-OrderInsights`, kept for 14 days. |
+| `InsightsRole` | IAM role for the function. It may list the bucket for the `exports/orders/` prefix and read objects under it, and has no other access. |
+| `OrderInsightsFunction` | AWS Lambda function `CloudShirt-OrderInsights`. It runs on Python 3.12, has 256 MB of memory and a 30 second timeout, and reads the bucket name from the `ORDER_EXPORT_BUCKET` environment variable. |
+| `Api` | API Gateway REST API `CloudShirt-Order-Insights`, regional endpoint. |
+| `ApiProxyResource` | The `{proxy+}` resource, so every path reaches the same function. |
+| `ApiProxyMethod` | The `ANY` method using a Lambda proxy integration. Routing happens inside the function. |
+| `ApiDeployment` | API Gateway deployment. It carries the `DeploymentVersion` value in its description. |
+| `ApiStage` | The `prod` stage, throttled to 20 requests per second with a burst of 40, with detailed metrics enabled. |
+| `ApiInvokePermission` | Allows API Gateway to invoke the function. |
+
+The function serves four routes: `GET /health` returns the service name and bucket, `GET /exports` lists the CSV files under `exports/orders/` and gives each one an `id`, `GET /exports/{id}` summarises a single export, and `GET /summary` totals every export and returns a per-export series.
+
+The export script names its files `orders_YYYYMMDD_HHMMSS.csv`, so each run produces a new object rather than overwriting the previous one. The function accepts that naming and also the `orders-YYYY-MM-DD.csv` form, and takes the part after `orders_` or `orders-` as the export's `id`.
+
+Because `scripts/export.sh` runs `SELECT *` against the `Orders` table alone, its exports contain no prices or quantities: those columns live in the separate `OrderItems` table. The endpoint therefore reports order and buyer counts as measurements, and returns `null` for units, revenue and best-selling products, naming them in `unavailableMetrics`. This is the intended behaviour rather than a failure, and an export that joins `OrderItems` fills those fields in with no change to the infrastructure.
+
+The order export columns are matched by name rather than by position, and each column accepts the spellings it is likely to arrive as, for example `order_id`, `OrderID` or `Id` for the order number and `qty` or `units` for the quantity. A column that cannot be found is treated as absent, and the metrics that depend on it are returned as `null` and named in `unavailableMetrics`. This means an export of the `Orders` table alone still produces a useful response, even though prices and quantities only exist in the `OrderItems` table.
+
+The stack outputs `ApiEndpoint`, the invoke URL of the API, and `OrderInsightsFunctionName`, the name of the function.
+
 ## Justification of choices 
 
 ## Roll-out manual 
@@ -89,10 +118,12 @@ Both alarms set `TreatMissingData` to `notBreaching`, so a period without metric
 
 4. **Verify the monitoring setup (optional).** If an alarm email address was provided, confirm the subscription from the message that Amazon SNS sends, then open the `CloudShirt-Overview` dashboard and the two CloudWatch alarms to check that metrics are being collected.
 
+5. **Verify the serverless component (optional).** Run `bash scripts/export.sh` on a web server instance to produce an export, then read the `OrderInsightsApiEndpoint` output of the root stack and call the endpoint, for example `curl "${API}health"` and `curl "${API}exports"`. Listing the exports and then requesting one by its `id` shows whether the function reads them correctly. A CSV uploaded to the `exports/orders/` prefix by hand works equally well.
+
 ## Recommmendations 
 
 ## Conclusion 
 
 The project defines a modular AWS infrastructure for the CloudShirt application using CloudFormation. The application tier is designed to support high availability across two Availability Zones and scheduled scaling between 18:00 and 20:00 Eastern Time. The solution also provisions EFS, RDS, an Elastic Stack monitoring environment, a CloudWatch stack with alarms, SNS notifications and a dashboard, and a separate serverless stack.
 
-The configuration addresses the main infrastructure requirements, but some capabilities must be confirmed through deployment and testing. In particular, successful Filebeat log delivery, daily log rotation, the scripted RDS order export, the confirmation of the SNS alarm subscription, and the exact serverless functionality require verification before the project can be reported as fully complete.
+The configuration addresses the main infrastructure requirements, but some capabilities must be confirmed through deployment and testing. In particular, successful Filebeat log delivery, daily log rotation, the scripted RDS order export, the confirmation of the SNS alarm subscription, and the deployed order insights endpoint require verification before the project can be reported as fully complete.
