@@ -7,76 +7,47 @@ The application is based on the CloudShirt ASP.NET Core 8.0 web application. The
 The infrastructure is divided into separate CloudFormation templates. A master template, main.yaml, orchestrates the deployment of the individual components. A UserData script automates the installation and configuration of the CloudShirt application on EC2 instances.
 The main objectives are to provide high availability, support scheduled scaling, store application logs centrally, provision a relational database using Infrastructure as Code, and provide monitoring and serverless functionality.
 
+## Solution overview
+CloudShirt is a startup from Germany that wants to run its .NET web shop on AWS. This solution deploys the CloudShirt ASP.NET Core 8 application with one command. A single CloudFormation root stack, CloudShirtInfrastructure, creates eight nested stacks. Customers reach the shop through one Application Load Balancer URL, which spreads traffic over web servers in two Availability Zones. The servers use a private Amazon RDS for SQL Server database, write their logs to Amazon EFS and ship them with Filebeat to an Elastic Stack. A script exports the order table to S3, and a serverless API reads those exports.
+
+![Overall deployment](./diagrams/deployment.png)
+
 ## Learning objectives 
-The assignment requires the solution to cover the nine learning objectives described in the course manual. The following points describe the AWS concepts used in the project. They should be matched with the exact learning-objective wording in the course manual before submission.
 
 Cloud infrastructure and AWS services: The solution uses AWS services including EC2, VPC, Elastic Load Balancing, EFS, RDS, S3, AWS Lambda, API Gateway, and CloudFormation.
 
-**Networking:** A VPC provides an isolated network environment. Public and private subnets are configured across two Availability Zones, with routing and security groups controlling access.
-
-**Infrastructure as Code:** CloudFormation templates define and provision the infrastructure in a repeatable and maintainable way.
-
-**Compute resources:** EC2 instances host the CloudShirt ASP.NET Core application. A Launch Template defines the configuration used when instances are created.
-
-**High availability and scalability:** An Application Load Balancer distributes incoming HTTP traffic to application instances managed by an Auto Scaling Group.
-
-**Storage:** EFS provides shared file storage for application logs, while S3 stores objects such as exported data.
-
-**Databases:** Amazon RDS for SQL Server provides a managed relational database for the application.
-
-**Monitoring and logging:** Elasticsearch and Kibana provide a monitoring and log-analysis environment. Filebeat is configured to forward logs to Elasticsearch. Amazon CloudWatch complements this with metric alarms for the Auto Scaling Group and the load balancer, SNS notifications, and a dashboard.
-
-**Automation and serverless computing:** UserData automates EC2 instance configuration, while `07-serverless.yaml` provisions an AWS Lambda function and an API Gateway REST API that serve summaries of the exported order data. The function runs without a server to manage and is billed only when it is invoked.
+| Learning objective | Where it is covered? | How? |
+| --- | --- | --- |
+| Networking | `01-networking.yaml` | A VPC with public subnets for the ALB and web servers and private subnets that only hold the database, each pair spread over two AZs, with separate route tables. |
+| Security | `02-security.yaml`, `03-storage.yaml` | Security groups are chained: internet to ALB, ALB to web servers, web servers to EFS (2049), RDS (1433) and Elasticsearch (9200). EFS is encrypted, the S3 bucket blocks public access and uses SSE. |
+| Compute and scaling | `05-application.yaml` | Launch template with Amazon Linux 2023, Auto Scaling Group with 2 to 4 instances, scheduled scaling actions. |
+| Load balancing and high availability | `05-application.yaml` | Internet-facing ALB over two AZs, target group with ELB health checks, instances replaced automatically when unhealthy. |
+| Storage | `03-storage.yaml` | EFS for shared application logs, S3 for order exports. |
+| Databases | `04-database.yaml` | RDS for SQL Server in a DB subnet group over two private subnets, snapshot on deletion. |
+| Monitoring and logging | `06-monitoring.yaml`, `08-cloudwatch.yaml`, `userdata.sh `| Elastic Stack with Filebeat for logs, CloudWatch alarms, SNS topic and dashboard for metrics. |
+| Serverless | `07-serverless.yaml` | Lambda and API Gateway reading the S3 exports. |
+| Infrastructure as code and automation | main.yaml, provision.sh | Nested stacks, `aws cloudformation package` and `deploy`, one script for create, update and delete. |
 
 
 ## Requirements 
+| REQ | Solution | Files |
+| --- | --- | --- |
+| REQ-01 | The CloudShirt .NET application runs in an EC2 Auto Scaling Group with a minimum of two instances, distributed across two Availability Zones and registered behind an Application Load Balancer. The ALB provides a single URL for accessing the application and distributes traffic between the available instances. | [05-application.yaml](../templates/05-application.yaml) - launch template, ALB, target group and Auto Scaling Group<br>[01-networking.yaml](../templates/01-networking.yaml) - VPC and subnets in two AZs<br>[userdata.sh](../scripts/userdata.sh) - installs and starts the application |
+| REQ-02 | The Auto Scaling Group has two scheduled actions: it scales out from 2 to 4 instances at 18:00 Eastern Time and scales back to 2 instances at 20:00 (time zone `America/New_York`). This lets the application handle the expected peak in traffic. | [05-application.yaml](../templates/05-application.yaml) - scheduled scale-out and scale-in actions |
+| REQ-03 | EFS is provisioned with CloudFormation, with mount targets in both Availability Zones, and mounted on the web servers at `/mnt/cloudshirt-logs`. Each instance writes its application log to its own directory on the shared file system and logrotate rotates it daily into dated files. The logs are therefore stored centrally and remain available when instances are replaced or scaled. | [03-storage.yaml](../templates/03-storage.yaml) - EFS file system and mount targets<br>[02-security.yaml](../templates/02-security.yaml) - EFS security group (NFS port 2049)<br>[userdata.sh](../scripts/userdata.sh) - mount, log directory and daily log rotation |
+| REQ-04 | An Amazon RDS SQL Server database is provisioned with CloudFormation in the private subnets and only accepts connections from the web servers. The application connects through the RDS endpoint. Database credentials and connection information are passed to the instances through CloudFormation parameters. | [04-database.yaml](../templates/04-database.yaml) - RDS instance and subnet group<br>[02-security.yaml](../templates/02-security.yaml) - database security group (port 1433)<br>[05-application.yaml](../templates/05-application.yaml) - passes endpoint and credentials to the user data |
+| REQ-05 | The `06-monitoring.yaml` template provisions an Elastic Stack instance with Elasticsearch and Kibana v8.x. Elasticsearch receives the log data, while Kibana provides a web interface (port 5601) for searching and analysing it. | [06-monitoring.yaml](../templates/06-monitoring.yaml) - Elastic Stack instance<br>[02-security.yaml](../templates/02-security.yaml) - monitoring security group<br>[08-cloudwatch.yaml](../templates/08-cloudwatch.yaml) - extra: CloudWatch alarms and dashboard |
+| REQ-06 | The UserData script installs Filebeat on each application instance. It collects the instance's own application logs from `/mnt/cloudshirt-logs/<hostname>/app.log*` and the system log `/var/log/messages` and sends them to Elasticsearch. A Filebeat failure does not stop the application setup. | [userdata.sh](../scripts/userdata.sh) - Filebeat installation and configuration<br>[06-monitoring.yaml](../templates/06-monitoring.yaml) - provides the Elasticsearch address |
+| REQ-07 | The script `export.sh` exports the Orders table from the RDS database to a CSV file with a UTC timestamp in its name and uploads it to the S3 export bucket (`exports/orders/`) with the AWS CLI. It runs on a web server because the database is private, and it can be run repeatedly. | [export.sh](../scripts/export.sh) - the export script<br>[03-storage.yaml](../templates/03-storage.yaml) - the S3 export bucket |
+| REQ-08 | The `07-serverless.yaml` template provisions an AWS Lambda function exposed through an API Gateway REST API. The function summarises the order exports that the REQ-07 script writes to the `exports/orders/` prefix in Amazon S3 and returns them over four read-only routes, so staff can see order totals, buyer counts and, where the export carries prices, unit counts and best-selling products without opening the database. The function is provisioned entirely through CloudFormation and uses an IAM role that can only list and read that prefix. | [07-serverless.yaml](../templates/07-serverless.yaml) - Lambda, API Gateway and IAM role<br>[insights.py](../lambda/order_insights/insights.py) - the Lambda code<br>[main.yaml](../templates/main.yaml) - passes the bucket name and ARN to the stack |
 
-| REQ    | Solution |
-| -------- | ------- |
-| REQ-01  | The CloudShirt .NET application runs on an EC2 auto scaling group with a minimum og two instnaces. The instances are distrubuted across two availability zones and are registered behind an application load balancer. The ALB provides a single URL for accessing the application and distributes trafic betweek the available instances    |
-| REQ-02 | The auto scaling group is configured to scale out from 2 to 4 instances at 18:00 eastern time and scale back to 2 instances at 20:00. This allows the applicaztion to handle insreased traffic during the expected peak period.     |
-| REQ-03    | EFS is provisioned using Cloud formation and mounted on the CloudShirt web services at `/mnt/cloudshirt-logs`. The file system can be shared by the applciation instances so that log files are stored centrally and remain acceptable whrn instances are replaced or scaled.     |
-| REQ-04  | An Amazon RDS SQL Server database is provisioned using AWS CloudFormation. The database is deployed in the private subnets and the CloudShirt application connects to it using the RDS endpoint. Database credentials and connection information are passed to the application through CloudFormation parameters.    |
-| REQ-05 |  The `06-monitoring.yaml` template provisions an Elastic Stack monitoring instance with Elasticsearch and Kibana v8.x. Elasticsearch receives log data, while Kibana provides a web interface for searching and analysing it. The deployed services and access to the dashboard should be tested.   |
-| REQ-06    | The UserData script attempts to install Filebeat on each application instance and configures it to collect files from `/mnt/cloudshirt-logs/*.log` and system logs from `/var/log/messages`. Filebeat is configured to send data to Elasticsearch. The script allows the application setup to continue if Filebeat installation fails.  |
-|REQ-07 |A script is used to export the order data from the RDS database and store the exported data in an Amazon S3 bucket. This provides a scripted way of transferring database order information to durable object storage|
-|REQ-08 |The `07-serverless.yaml` template provisions an AWS Lambda function exposed through an API Gateway REST API. The function summarises the order exports that the REQ-07 script writes to the `exports/orders/` prefix in Amazon S3 and returns them over four read-only routes, so staff can see order totals, buyer counts and, where the export carries prices, unit counts and best-selling products without opening the database. The function is provisioned entirely through CloudFormation and uses an IAM role that can only list and read that prefix. |
+## Application deployment 
 
-### IaC
-The infrastructure is separated into the following templates:
+`05-application.yaml` creates everything that serves the CloudShirt shop: the load balancer, the web servers and the scaling rules. It covers `REQ-01` (high availability behind one URL) and `REQ-02` (scale out between 18:00 and 20:00 Eastern). The web servers set themselves up with userdata.sh, which also covers the mounting side of `REQ-03` and the Filebeat part of `REQ-06`.
 
-`01-networking.yaml` — VPC, subnets, and networking resources.
+The launch template passes the settings to every new instance as environment variables and downloads `userdata.sh` from GitHub. The EFS mount and Filebeat steps are allowed to fail without stopping the application. The load balancer starts sending traffic as soon as the health check passes.
 
-`02-security.yaml` — security groups for the load balancer, web servers, EFS, RDS, and monitoring.
-
-`03-storage.yaml` — EFS and S3 storage resources.
-
-`04-database.yaml` — Amazon RDS database.
-
-`05-application.yaml` — EC2 Launch Template, Application Load Balancer, target group, and Auto Scaling Group.
-
-`06-monitoring.yaml` — Elastic Stack monitoring instance.
-
-`07-serverless.yaml` — serverless order insights API, an AWS Lambda function exposed through API Gateway.
-
-`08-cloudwatch.yaml` — CloudWatch alarms, SNS notifications, and the CloudWatch dashboard.
-
-`main.yaml` — master template that orchestrates the nested stacks.
-
-The `scripts/userdata.sh` script installs the required dependencies, mounts EFS, configures the application database connection, publishes the .NET application, creates a systemd service, and attempts to configure Filebeat.
-
-### CloudWatch monitoring
-
-`08-cloudwatch.yaml` is deployed by `main.yaml` as the `CloudwatchStack` nested stack. It depends on the application stack and receives the Auto Scaling Group name, the load balancer full name (`app/<name>/<id>`) and the target group full name (`targetgroup/<name>/<id>`) from it. The optional `AlarmEmail` parameter is declared on the root stack and forwarded to the CloudWatch stack.
-
-| Resource | Purpose |
-| -------- | ------- |
-| `AlarmTopic` | Amazon SNS topic `CloudShirt-Alarms` that every alarm publishes to. The email subscription is created only when `AlarmEmail` is set, because an empty endpoint is not valid. |
-| `CloudShirtHighCpuAlarm` | Alarm `CloudShirt-HighCPU`. Fires when the average `CPUUtilization` of the Auto Scaling Group is above 70% for two consecutive 5-minute periods. |
-| `CloudShirtALBUnhealthyHostAlarm` | Alarm `CloudShirt-ALB-Unhealthy-Host`. Fires when the maximum `UnHealthyHostCount` of the target group reaches one, so a single target failing its ALB health checks is reported. |
-| `CloudShirtDashboard` | CloudWatch dashboard `CloudShirt-Overview` with widgets for ASG CPU utilisation, ALB request count, ALB target response time, healthy vs. unhealthy targets, and ALB 5XX errors. |
-
-Both alarms set `TreatMissingData` to `notBreaching`, so a period without metric data does not raise a false alarm. The stack outputs `AlarmTopicArn`, the SNS topic that the alarms publish to, and `CloudShirtDashboardOutput`, the name of the dashboard.
+![User data flow](./diagrams/userdata-flow.png)
 
 ### Serverless component
 
@@ -100,27 +71,68 @@ The function serves four routes: `GET /health` returns the service name and buck
 
 The export script names its files `orders_YYYYMMDD_HHMMSS.csv`, so each run produces a new object rather than overwriting the previous one. The function accepts that naming and also the `orders-YYYY-MM-DD.csv` form, and takes the part after `orders_` or `orders-` as the export's `id`.
 
+![Overall deployment](./diagrams/deployment.png)
+
 Because `scripts/export.sh` runs `SELECT *` against the `Orders` table alone, its exports contain no prices or quantities: those columns live in the separate `OrderItems` table. The endpoint therefore reports order and buyer counts as measurements, and returns `null` for units, revenue and best-selling products, naming them in `unavailableMetrics`. This is the intended behaviour rather than a failure, and an export that joins `OrderItems` fills those fields in with no change to the infrastructure.
 
 The order export columns are matched by name rather than by position, and each column accepts the spellings it is likely to arrive as, for example `order_id`, `OrderID` or `Id` for the order number and `qty` or `units` for the quantity. A column that cannot be found is treated as absent, and the metrics that depend on it are returned as `null` and named in `unavailableMetrics`. This means an export of the `Orders` table alone still produces a useful response, even though prices and quantities only exist in the `OrderItems` table.
 
 The stack outputs `ApiEndpoint`, the invoke URL of the API, and `OrderInsightsFunctionName`, the name of the function.
 
+![ExportOrders](./diagrams/order-export.png)
+
+
+### CloudWatch monitoring
+
+`08-cloudwatch.yaml` is deployed by `main.yaml` as the `CloudwatchStack` nested stack. It depends on the application stack and receives the Auto Scaling Group name, the load balancer full name (`app/<name>/<id>`) and the target group full name (`targetgroup/<name>/<id>`) from it.
+
+| Resource | Purpose |
+| -------- | ------- |
+| `AlarmTopic` | Amazon SNS topic `CloudShirt-Alarms` that every alarm publishes to. The email subscription is created only when `AlarmEmail` is set, because an empty endpoint is not valid. |
+| `CloudShirtHighCpuAlarm` | Alarm `CloudShirt-HighCPU`. Fires when the average `CPUUtilization` of the Auto Scaling Group is above 70% for two consecutive 5-minute periods. |
+| `CloudShirtALBUnhealthyHostAlarm` | Alarm `CloudShirt-ALB-Unhealthy-Host`. Fires when the maximum `UnHealthyHostCount` of the target group reaches one, so a single target failing its ALB health checks is reported. |
+| `CloudShirtDashboard` | CloudWatch dashboard `CloudShirt-Overview` with widgets for ASG CPU utilisation, ALB request count, ALB target response time, healthy vs. unhealthy targets, and ALB 5XX errors. |
+
+Both alarms set `TreatMissingData` to `notBreaching`, so a period without metric data does not raise a false alarm. The stack outputs `AlarmTopicArn`, the SNS topic that the alarms publish to, and `CloudShirtDashboardOutput`, the name of the dashboard.
+
 ## Justification of choices 
+| Choice | Reason | Trade-off |
+| --- | --- | --- |
+| One root stack with nested stacks | Clear separation by layer, reusable outputs, one create or delete command | Needs packaging; a failed child stack rolls back the whole root stack |
+| Web servers in public subnets, database in private subnets | No NAT gateway cost; the database is not reachable from the internet | Web servers have public IPs and rely on security groups |
+| RDS SQL Server Express | The CloudShirt application is built for SQL Server; the Express edition is the cheapest | Single AZ, size limits |
+| EFS directory per instance plus logrotate | Shared storage survives instance replacement, and separate directories avoid interleaved logs and duplicate indexing | Only application output goes to EFS |
+| Export script runs on EC2 | The database is private, so the script has to run inside the VPC | Needs an instance profile and a running web server |
+| `LabInstanceProfile` for instances | AWS Academy does not allow custom instance roles | Broader permissions than a least-privilege role |
+| User data downloaded from GitHub | Instances stay small and the script is versioned; `provision.sh` passes the URL as a parameter | The repository must be readable by the instances; changes must be on `main` |
+| Single-node Elastic Stack with security disabled | Simplest setup for a lab (REQ-05, REQ-06) | Not suitable for production |
+| CloudWatch alarms and dashboard as an extra stack | Metrics and alerting for the ALB and ASG next to the log analysis in Elastic | Alarm email is optional and empty by default |
 
-## Roll-out manual 
+### Provision flow 
+![DeploymentOrder](./diagrams/deployment-order.png)
 
-1. **Prepare the AWS environment:** Sign in to the AWS Academy environment and select the configured AWS region. Confirm that the required EC2 key pair is available.
+## 6. Roll-out
 
-2. **Prepare the repository.** Ensure that the CloudFormation templates and scripts are committed to the repository and that scripts/userdata.sh is available at the URL referenced by the deployment script.
+1. **Prerequisites:** AWS CLI v2, active AWS Academy credentials (refresh them whenever the lab restarts), the key pair `vockey`, and the repository pushed to GitHub with `scripts/userdata.sh` on `main`.
+2. **Deploy:** run `bash scripts/provision.sh`. It checks the credentials, creates the staging bucket `cloudshirt-cfn-staging-<account id>`, packages the nested templates and the Lambda code, and creates or updates the root stack. This takes more than 10 minutes; RDS is the slowest part. Options include `--region`, `--stack-name`, `--key-name`, `--db-username`, `--db-password`, `--delete` and `--yes`.
+3. **Outputs:** the script prints the outputs of the root and nested stacks: `LoadBalancerDNS` (shop URL), `KibanaURL`, `OrderInsightsApiEndpoint` and `OrderExportBucketName`.
+4. **Verify:** open `http://<LoadBalancerDNS>`; check that the targets are healthy; place a test order; run `scripts/export.sh` on a web server and list the bucket; open Kibana on port 5601 and look for the logs; call the API endpoint.
+5. **Tear down:** `bash scripts/provision.sh --delete`. The export bucket (`DeletionPolicy: Retain`), the staging bucket and the final RDS snapshot are kept on purpose and can be removed manually.
 
-3. **Deploy the infrastructure.** Run the provided provisioning script, scripts/provision.sh, to package the templates and create or update the master CloudFormation stack.
+Stack updates change the launch template, but running instances are not replaced automatically. Start an instance refresh on the Auto Scaling Group or replace the instances to apply the change.
 
-4. **Verify the monitoring setup (optional).** If an alarm email address was provided, confirm the subscription from the message that Amazon SNS sends, then open the `CloudShirt-Overview` dashboard and the two CloudWatch alarms to check that metrics are being collected.
-
-5. **Verify the serverless component (optional).** Run `bash scripts/export.sh` on a web server instance to produce an export, then read the `OrderInsightsApiEndpoint` output of the root stack and call the endpoint, for example `curl "${API}health"` and `curl "${API}exports"`. Listing the exports and then requesting one by its `id` shows whether the function reads them correctly. A CSV uploaded to the `exports/orders/` prefix by hand works equally well.
 
 ## Recommmendations 
+- **Secrets:** the database password has a default in the templates and is passed through user data. Use AWS Secrets Manager or SSM Parameter Store and remove the defaults.
+- **Network exposure:** SSH (22) and Kibana (5601) are open to the internet and the web servers still allow direct port 80 access. Restrict them to known IP ranges, use SSM Session Manager instead of SSH, and remove the temporary port 80 rule.
+- **HTTPS:** add an ACM certificate and an HTTPS listener (with a Route 53 name) so that customers do not use plain HTTP.
+- **Database availability:** enable Multi-AZ and encryption for RDS, and move to a larger edition for production.
+- **Monitoring:** enable Elastic security and run more than one node, or use Amazon OpenSearch Service. Add a CloudWatch agent for memory and disk metrics.
+- **Log coverage:** only application output goes to EFS. Check that `/var/log/messages` exists on Amazon Linux 2023 or switch that input to the journal.
+- **Scaling:** add target tracking on CPU or request count next to the scheduled actions, so that unexpected spikes are handled too.
+- **Automation:** run the export on a schedule with EventBridge and SSM, and add a CI pipeline with `cfn-lint` and a deployment test.
+- **Cost and cleanup:** add lifecycle rules to the export bucket and clean up retained buckets after redeployments.
+
 
 ## Conclusion 
 

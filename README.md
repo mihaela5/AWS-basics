@@ -16,7 +16,7 @@ CloudFormation nested stacks require child templates to be accessible via Amazon
 
 ```bash
 # Set your deployment variables
-export AWS_REGION="eu-central-1"
+export AWS_REGION="us-east-1"
 export STAGING_BUCKET="cloudshirt-cfn-staging-$(aws sts get-caller-identity --query Account --output text)"
 
 # Create the staging bucket
