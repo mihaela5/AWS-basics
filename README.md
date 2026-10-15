@@ -102,3 +102,47 @@ curl "${API}exports/20261012_223600"
 Any CSV with an order-number column works. The function matches the remaining columns by name, accepting the common spellings an export is likely to use, and reports the metrics it could not compute under `unavailableMetrics` instead of failing.
 
 The function reads the exports from S3.
+
+---
+
+## 6. Docker image
+
+The CloudShirt source lives in its own repository. We forked it to `https://github.com/athype/CloudShirt` so that the image definition sits next to the code it builds, and so the Buildserver builds a revision we control rather than whatever upstream `main` happens to be that night.
+
+* `src/Web/Dockerfile` — three stages: the SDK image restores and publishes, the ASP.NET runtime image receives only the published output.
+* `.dockerignore` — keeps `.git`, build output, tests and local configuration out of the build context.
+
+### Build locally
+
+```bash
+git clone https://github.com/athype/CloudShirt.git
+cd CloudShirt
+docker build -f src/Web/Dockerfile -t cloudshirt/web:local .
+```
+
+The build needs network access: the NuGet restore downloads packages, and `src/Web/wwwroot/lib` is git-ignored, so the client-side libraries are restored from cdnjs during publish. Copying only the `.csproj` files before `dotnet restore` keeps that download in its own layer, so editing application code does not repeat it.
+
+### Run locally
+
+Without a database the application still starts, but the catalog pages stay empty. For a quick check of the image, run it against the in-memory database the application supports:
+
+```bash
+docker run --rm -p 8080:80 -e UseOnlyInMemoryDatabase=true cloudshirt/web:local
+```
+
+<http://localhost:8080> then serves the storefront with seeded catalog data.
+
+### How the connection strings are injected
+
+Nothing is baked into the image. The application reads both connection strings through the standard ASP.NET Core configuration chain, where environment variables override `appsettings.json`, so nested keys use a double underscore:
+
+```bash
+docker run --rm -p 8080:80 \
+  -e ConnectionStrings__CatalogConnection="Server=<rds-endpoint>,1433;User ID=<user>;Password=<password>;Initial Catalog=Microsoft.eShopOnWeb.CatalogDb;TrustServerCertificate=True;" \
+  -e ConnectionStrings__IdentityConnection="Server=<rds-endpoint>,1433;User ID=<user>;Password=<password>;Initial Catalog=Microsoft.eShopOnWeb.Identity;TrustServerCertificate=True;" \
+  cloudshirt/web:local
+```
+
+The image sets `ASPNETCORE_ENVIRONMENT=Development` because `src/Web/Program.cs` only reads the connection strings from configuration in the `Development` and `Docker` environments. Every other value sends the application to Azure Key Vault, which this deployment does not have: the startup would fail while constructing the Key Vault client. `src/Web/appsettings.Docker.json` is excluded through `.dockerignore` because it contains a hard-coded SQL Server password.
+
+The container listens on port 80 (`ASPNETCORE_URLS`), which is the port the Swarm services publish.
