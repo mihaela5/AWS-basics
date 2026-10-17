@@ -1,0 +1,167 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Buildserver in the private subnet - builds the CloudShirt images and pushes them to ECR.
+
+Parameters:
+
+  PrivateSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private subnet that hosts the Buildserver (no public IP)
+
+  BuildserverSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group that allows SSH only from the web servers
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: EC2 KeyPair used for SSH administration
+
+  InstanceType:
+    Type: String
+    Default: t3.small
+    Description: Buildserver instance type (t3.small gives Docker builds more memory)
+
+  SourceRepositoryUrl:
+    Type: String
+    Default: https://github.com/athype/CloudShirt.git
+    Description: CloudShirt fork that contains the Dockerfile and docker-compose.yml
+
+  SourceBranch:
+    Type: String
+    Default: main
+    Description: Branch cloned into /opt/CloudShirt on first boot
+
+  InstanceProfileName:
+    Type: String
+    Default: LabInstanceProfile
+    Description: >
+      Existing instance profile to attach to the Buildserver. AWS Academy
+      Learner Lab does not allow custom IAM roles, so LabInstanceProfile is
+      the default there. Leave this empty to create a least-privilege role
+      and instance profile with ECR push/pull and SSM Session Manager access.
+
+Conditions:
+  CreateInstanceProfile: !Equals [!Ref InstanceProfileName, ""]
+
+Resources:
+
+  # AWS Academy Learner Lab does not allow custom IAM roles, so the stack
+  # defaults to the pre-created LabInstanceProfile. Pass an empty
+  # InstanceProfileName to create this least-privilege role instead; the
+  # managed policies cover ECR push/pull and SSM Session Manager.
+  BuildserverRole:
+    Type: AWS::IAM::Role
+    Condition: CreateInstanceProfile
+    Properties:
+      RoleName: CloudShirtBuildserverRole
+      Description: CloudShirt Buildserver - ECR push/pull and SSM Session Manager
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser"
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      Tags:
+        - Key: Name
+          Value: CloudShirtBuildserverRole
+
+  BuildserverInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: CreateInstanceProfile
+    Properties:
+      InstanceProfileName: CloudShirtBuildserverInstanceProfile
+      Roles:
+        - !Ref BuildserverRole
+
+  Buildserver:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PrivateSubnetId
+      # The private subnet has no route from the internet gateway, so the
+      # instance is only reachable through the web-server jump host or SSM.
+      SecurityGroupIds:
+        - !Ref BuildserverSecurityGroupId
+      IamInstanceProfile: !If [CreateInstanceProfile, !Ref BuildserverInstanceProfile, !Ref InstanceProfileName]
+      Tags:
+        - Key: Name
+          Value: CloudShirtBuildserver
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euo pipefail
+
+          # Keep the complete boot log; cloud-init also forwards it to the console.
+          exec > >(tee /var/log/buildserver-init.log) 2>&1
+
+          echo "Starting CloudShirt Buildserver provisioning..."
+
+          # Base tooling. amazon-ssm-agent is preinstalled on the standard
+          # AL2023 AMI, but installing it keeps minimal AMIs working too.
+          dnf update -y
+          dnf install -y docker git awscli-2 amazon-ssm-agent amazon-ecr-credential-helper
+
+          # AL2023 does not package the Docker Compose or buildx plugins, so
+          # install the pinned upstream binaries where the docker CLI looks.
+          COMPOSE_VERSION="v5.6.0"
+          BUILDX_VERSION="v0.38.0"
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -fsSL "https://github.com/docker/compose/releases/download/$COMPOSE_VERSION/docker-compose-linux-x86_64" \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+          curl -fsSL "https://github.com/docker/buildx/releases/download/$BUILDX_VERSION/buildx-$BUILDX_VERSION.linux-amd64" \
+            -o /usr/local/lib/docker/cli-plugins/docker-buildx
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/lib/docker/cli-plugins/docker-buildx
+
+          systemctl enable --now docker
+          systemctl enable --now amazon-ssm-agent
+          usermod -aG docker ec2-user
+
+          # Docker asks the ECR credential helper for a token, and the helper signs it with the instance profile. No password is stored on disk.
+          export AWS_DEFAULT_REGION="${AWS::Region}"
+          REGISTRY="$(aws sts get-caller-identity --query Account --output text).dkr.ecr.${AWS::Region}.amazonaws.com"
+
+          for HOME_DIR in /root /home/ec2-user; do
+            mkdir -p "$HOME_DIR/.docker" "$HOME_DIR/.aws"
+            cat > "$HOME_DIR/.docker/config.json" <<EOF
+          {
+            "credHelpers": {
+              "$REGISTRY": "ecr-login"
+            }
+          }
+          EOF
+            printf '[default]\nregion = %s\noutput = json\n' "${AWS::Region}" > "$HOME_DIR/.aws/config"
+          done
+          chown -R ec2-user:ec2-user /home/ec2-user/.aws /home/ec2-user/.docker
+
+          # Clone the fork that carries the Dockerfile and docker-compose.yml.
+          if [ ! -d /opt/CloudShirt/.git ]; then
+            git clone --branch "${SourceBranch}" "${SourceRepositoryUrl}" /opt/CloudShirt
+          fi
+          chown -R ec2-user:ec2-user /opt/CloudShirt
+
+          docker --version
+          docker compose version
+          docker buildx version
+          aws --version
+          git --version
+
+          echo "CloudShirt Buildserver provisioning completed."
+
+Outputs:
+
+  InstanceId:
+    Description: Instance ID of the CloudShirt Buildserver
+    Value: !Ref Buildserver
+
+  PrivateIp:
+    Description: Private IP address of the CloudShirt Buildserver
+    Value: !GetAtt Buildserver.PrivateIp
+
+  InstanceProfileUsed:
+    Description: Instance profile attached to the Buildserver
+    Value: !If [CreateInstanceProfile, !Ref BuildserverInstanceProfile, !Ref InstanceProfileName]

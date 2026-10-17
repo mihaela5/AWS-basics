@@ -28,6 +28,10 @@ STAGING_BUCKET="${STAGING_BUCKET:-}"
 KEY_NAME="${KEY_NAME:-vockey}"
 DB_USERNAME="${DB_USERNAME:-cloudshirtadmin}"
 DB_PASSWORD="${DB_PASSWORD:-ChangeMe123!}"
+# AWS Academy Learner Lab blocks custom IAM roles, so the pre-created
+# LabInstanceProfile is the default. Set this to an empty value to have the
+# Buildserver stack create a dedicated least-privilege role.
+BUILDSERVER_INSTANCE_PROFILE="${BUILDSERVER_INSTANCE_PROFILE:-LabInstanceProfile}"
 
 # Shared repository.
 # Can also be overridden using an environment variable.
@@ -60,6 +64,10 @@ Options:
   -k, --key-name NAME      EC2 KeyPair name (default: vockey).
   -u, --db-username USER   Database master username (default: cloudshirtadmin).
   -p, --db-password PASS   Database master password (default: ChangeMe123!).
+  -i, --buildserver-instance-profile NAME
+                           Instance profile for the Buildserver (default:
+                           LabInstanceProfile). Pass "" to create the
+                           least-privilege CloudShirtBuildserverRole instead.
   -d, --delete             Delete the stack and all of its resources.
   -y, --yes                Do not ask for confirmation.
   -h, --help               Show this help and exit.
@@ -84,6 +92,11 @@ while [[ $# -gt 0 ]]; do
     -k|--key-name)    take_value "$1" "${2:-}"; KEY_NAME="$2";       shift 2 ;;
     -u|--db-username) take_value "$1" "${2:-}"; DB_USERNAME="$2";    shift 2 ;;
     -p|--db-password) take_value "$1" "${2:-}"; DB_PASSWORD="$2";    shift 2 ;;
+    # Accepts an explicit empty value: it tells the Buildserver stack to
+    # create the least-privilege role and instance profile itself.
+    -i|--buildserver-instance-profile)
+      [[ $# -ge 2 ]] || { error "Option $1 requires a value"; exit 1; }
+      BUILDSERVER_INSTANCE_PROFILE="$2"; shift 2 ;;
     -d|--delete)      DELETE_MODE="true"; shift ;;
     -y|--yes)         ASSUME_YES="true";  shift ;;
     -h|--help)        usage; exit 0 ;;
@@ -230,7 +243,8 @@ aws cloudformation deploy \
       "KeyName=${KEY_NAME}" \
       "DBUsername=${DB_USERNAME}" \
       "DBPassword=${DB_PASSWORD}" \
-      "UserDataScriptUrl=${USERDATA_SCRIPT_URL}"
+      "UserDataScriptUrl=${USERDATA_SCRIPT_URL}" \
+      "BuildserverInstanceProfile=${BUILDSERVER_INSTANCE_PROFILE}"
 
 # Report root stack outputs
 echo

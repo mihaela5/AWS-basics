@@ -156,6 +156,31 @@ Resources:
       SubnetId: !Ref PublicSubnet2
 
 
+  # Elastic IP used by the NAT gateway. The NAT gateway has an hourly charge
+  # for as long as the stack exists.
+  CloudShirtNatGatewayElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: CloudShirtNatGatewayElasticIP
+
+
+  # Outbound-only internet access for the private subnets (the Buildserver
+  # needs GitHub, the package repositories, Docker Hub and ECR; RDS ignores
+  # the default route).
+  CloudShirtNatGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn: CloudShirtVPCGatewayAttachment
+    Properties:
+      AllocationId: !GetAtt CloudShirtNatGatewayElasticIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: CloudShirtNatGateway
+
+
   # Create a separate route table for the private subnets.
   PrivateRouteTable:
     Type: AWS::EC2::RouteTable
@@ -164,6 +189,17 @@ Resources:
       Tags:
         - Key: Name
           Value: CloudShirtPrivateRouteTable
+
+
+  # Send the private subnets' internet-bound traffic through the NAT gateway.
+  # Inbound connections from the internet stay impossible: there is no route
+  # back to the private subnets from the internet gateway.
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref CloudShirtNatGateway
+      RouteTableId: !Ref PrivateRouteTable
 
 
   # Associate the private route table with private subnet 1.
@@ -210,6 +246,18 @@ Outputs:
     Value: !Ref PrivateRouteTable
     Export:
       Name: !Join [ ":", [ !Ref "AWS::StackName", PrivateRouteTable ] ]
+
+
+  NatGatewayRef:
+    Description: Reference to the NAT gateway used by the private subnets.
+    Value: !Ref CloudShirtNatGateway
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", NatGateway ] ]
+
+
+  NatGatewayPublicIp:
+    Description: Public IP address of the NAT gateway.
+    Value: !Ref CloudShirtNatGatewayElasticIP
 
 
   PublicSubnet1Ref:

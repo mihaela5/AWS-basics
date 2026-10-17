@@ -146,3 +146,52 @@ docker run --rm -p 8080:80 \
 The image sets `ASPNETCORE_ENVIRONMENT=Development` because `src/Web/Program.cs` only reads the connection strings from configuration in the `Development` and `Docker` environments. Every other value sends the application to Azure Key Vault, which this deployment does not have: the startup would fail while constructing the Key Vault client. `src/Web/appsettings.Docker.json` is excluded through `.dockerignore` because it contains a hard-coded SQL Server password.
 
 The container listens on port 80 (`ASPNETCORE_URLS`), which is the port the Swarm services publish.
+
+---
+
+## 7. Buildserver
+
+`templates/09-buildserver.yaml` provisions the Buildserver in private subnet 1. It has no public IP, reaches GitHub, the package repositories, Docker Hub and ECR through the NAT gateway added to `01-networking.yaml`, and clones `https://github.com/athype/CloudShirt.git` into `/opt/CloudShirt`.
+
+Its UserData installs Docker with the Compose and buildx plugins, git, AWS CLI v2, the Amazon ECR credential helper and the SSM agent, then configures Docker to authenticate to ECR with the instance profile instead of a stored password.
+
+The NAT gateway has an hourly charge while the stack exists. Inbound traffic is still impossible: the internet gateway has no route back to the private subnets.
+
+### Connect
+
+SSM Session Manager needs no inbound port (install the Session Manager plugin locally):
+
+```bash
+aws ssm start-session \
+  --target "$(aws cloudformation describe-stacks --stack-name CloudShirtInfrastructure \
+      --query "Stacks[0].Outputs[?OutputKey=='BuildserverInstanceId'].OutputValue" --output text)" \
+  --region $AWS_REGION
+```
+
+The session starts as `ssm-user`; switch to the user that owns the clone with `sudo su - ec2-user`.
+
+SSH is allowed only from the web servers, so use one of them as the jump host:
+
+```bash
+ssh -J ec2-user@<web-server-public-ip> ec2-user@<buildserver-private-ip>
+```
+
+The root stack outputs `BuildserverInstanceId` and `BuildserverPrivateIp`.
+
+### Instance profile
+
+`BuildserverInstanceProfile` defaults to `LabInstanceProfile`, because AWS Academy Learner Lab does not allow custom IAM roles. In an account that does, pass an empty value and the Buildserver stack creates `CloudShirtBuildserverRole` and `CloudShirtBuildserverInstanceProfile` with the `AmazonEC2ContainerRegistryPowerUser` and `AmazonSSMManagedInstanceCore` policies:
+
+```bash
+bash scripts/provision.sh --buildserver-instance-profile ""
+```
+
+---
+
+## 8. ECR registry
+
+`templates/10-ecr.yaml` creates the private repository `cloudshirt` with scan-on-push and a lifecycle policy that keeps the last `ImageRetentionCount` images (default 10). The root stack outputs `EcrRepositoryUri` (for example `<account-id>.dkr.ecr.<region>.amazonaws.com/cloudshirt`) and `EcrRepositoryName`:
+
+The Buildserver is already authenticated to ECR through the credential helper, so only the tag and push steps remain. Run this on the Buildserver; the AWS CLI reads the region from the `~/.aws/config` written by its UserData:
+
+The image is tagged with the build date and `latest`, matching what the nightly build will push.

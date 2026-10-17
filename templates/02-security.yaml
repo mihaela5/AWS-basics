@@ -79,6 +79,25 @@ Resources:
         - Key: Name
           Value: CloudShirtDBSecurityGroup
 
+  # Buildserver in the private subnet. It accepts SSH only from the web
+  # servers, which act as the jump host. Day-to-day access goes through SSM
+  # Session Manager, which needs no inbound rule at all. All outbound traffic
+  # is allowed so the instance can reach GitHub and ECR through the NAT gateway.
+  BuildserverSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow SSH to the Buildserver from the web servers (jump host) only
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+          Description: SSH from the web servers, which act as the jump host
+      Tags:
+        - Key: Name
+          Value: CloudShirtBuildserverSecurityGroup
+
   MonitoringSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -132,3 +151,9 @@ Outputs:
     Value: !Ref MonitoringSecurityGroup
     Export:
       Name: !Join [ ":", [ !Ref "AWS::StackName", MonitoringSecurityGroup ] ]
+
+  BuildserverSecurityGroupRef:
+    Description: Reference to the Buildserver security group.
+    Value: !Ref BuildserverSecurityGroup
+    Export:
+      Name: !Join [ ":", [ !Ref "AWS::StackName", BuildserverSecurityGroup ] ]

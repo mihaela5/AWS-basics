@@ -1,0 +1,62 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Private ECR registry for the CloudShirt Docker images.
+
+Parameters:
+
+  ImageRetentionCount:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+    Description: Number of images kept by the lifecycle policy
+
+Resources:
+
+  CloudShirtRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: cloudshirt
+
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+      # Nightly builds push one image per run, so the count also bounds how many days of images remain. The "latest" and date tags count separately.
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep the last ${ImageRetentionCount} images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": ${ImageRetentionCount}
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+      # A stack delete would otherwise fail while the repository still holds images.
+      EmptyOnDelete: true
+
+      Tags:
+        - Key: Name
+          Value: CloudShirtRepository
+
+Outputs:
+
+  RepositoryName:
+    Description: Name of the CloudShirt ECR repository
+    Value: !Ref CloudShirtRepository
+
+  RepositoryUri:
+    Description: URI used to tag and push images
+    Value: !GetAtt CloudShirtRepository.RepositoryUri
+
+  RepositoryArn:
+    Description: ARN of the CloudShirt ECR repository
+    Value: !GetAtt CloudShirtRepository.Arn
