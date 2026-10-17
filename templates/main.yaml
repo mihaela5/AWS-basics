@@ -17,6 +17,13 @@ Parameters:
       default. Pass an empty value to let the Buildserver stack create a
       least-privilege role with ECR push/pull and SSM Session Manager access.
 
+  ImageRetentionCount:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+    Description: Number of Docker images kept in the CloudShirt ECR repository
+
   DBUsername:
     Type: String
     Default: cloudshirtadmin
@@ -61,6 +68,13 @@ Resources:
         BuildserverSecurityGroupId: !GetAtt SecurityStack.Outputs.BuildserverSecurityGroupRef
         KeyName: !Ref KeyName
         InstanceProfileName: !Ref BuildserverInstanceProfile
+
+  EcrStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./10-ecr.yaml
+      Parameters:
+        ImageRetentionCount: !Ref ImageRetentionCount
 
   StorageStack:
     Type: AWS::CloudFormation::Stack
@@ -156,6 +170,18 @@ Outputs:
   BuildserverPrivateIp:
     Description: "Private IP address of the CloudShirt Buildserver"
     Value: !GetAtt BuildserverStack.Outputs.PrivateIp
+
+  EcrStackOutput:
+    Description: "ECR Stack ID"
+    Value: !Ref EcrStack
+
+  EcrRepositoryName:
+    Description: "Name of the CloudShirt ECR repository"
+    Value: !GetAtt EcrStack.Outputs.RepositoryName
+
+  EcrRepositoryUri:
+    Description: "URI used to tag and push CloudShirt images"
+    Value: !GetAtt EcrStack.Outputs.RepositoryUri
 
   StorageStackOutput:
     Description: "Storage Stack ID"

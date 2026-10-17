@@ -185,3 +185,13 @@ The root stack outputs `BuildserverInstanceId` and `BuildserverPrivateIp`.
 ```bash
 bash scripts/provision.sh --buildserver-instance-profile ""
 ```
+
+---
+
+## 8. ECR registry
+
+`templates/10-ecr.yaml` creates the private repository `cloudshirt` with scan-on-push and a lifecycle policy that keeps the last `ImageRetentionCount` images (default 10). The root stack outputs `EcrRepositoryUri` (for example `<account-id>.dkr.ecr.<region>.amazonaws.com/cloudshirt`) and `EcrRepositoryName`:
+
+The Buildserver is already authenticated to ECR through the credential helper, so only the tag and push steps remain. Run this on the Buildserver; the AWS CLI reads the region from the `~/.aws/config` written by its UserData:
+
+The image is tagged with the build date and `latest`, matching what the nightly build will push.
