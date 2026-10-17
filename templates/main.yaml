@@ -7,7 +7,16 @@ Parameters:
     Type: AWS::EC2::KeyPair::KeyName
     Description: EC2 KeyPair for SSH administration
     Default: vockey
-    
+
+  BuildserverInstanceProfile:
+    Type: String
+    Default: LabInstanceProfile
+    Description: >
+      Existing EC2 instance profile for the Buildserver. AWS Academy Learner
+      Lab does not allow custom IAM roles, so LabInstanceProfile is the
+      default. Pass an empty value to let the Buildserver stack create a
+      least-privilege role with ECR push/pull and SSM Session Manager access.
+
   DBUsername:
     Type: String
     Default: cloudshirtadmin
@@ -41,6 +50,17 @@ Resources:
       TemplateURL: ./02-security.yaml
       Parameters:
         VpcId: !GetAtt NetworkingStack.Outputs.VPCRef
+
+  BuildserverStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: [NetworkingStack, SecurityStack]
+    Properties:
+      TemplateURL: ./09-buildserver.yaml
+      Parameters:
+        PrivateSubnetId: !GetAtt NetworkingStack.Outputs.PrivateSubnet1Ref
+        BuildserverSecurityGroupId: !GetAtt SecurityStack.Outputs.BuildserverSecurityGroupRef
+        KeyName: !Ref KeyName
+        InstanceProfileName: !Ref BuildserverInstanceProfile
 
   StorageStack:
     Type: AWS::CloudFormation::Stack
@@ -124,6 +144,18 @@ Outputs:
   SecurityStackOutput:
     Description: "Security Stack ID"
     Value: !Ref SecurityStack
+
+  BuildserverStackOutput:
+    Description: "Buildserver Stack ID"
+    Value: !Ref BuildserverStack
+
+  BuildserverInstanceId:
+    Description: "Instance ID of the CloudShirt Buildserver"
+    Value: !GetAtt BuildserverStack.Outputs.InstanceId
+
+  BuildserverPrivateIp:
+    Description: "Private IP address of the CloudShirt Buildserver"
+    Value: !GetAtt BuildserverStack.Outputs.PrivateIp
 
   StorageStackOutput:
     Description: "Storage Stack ID"

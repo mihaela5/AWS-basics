@@ -8,7 +8,7 @@ The infrastructure is divided into separate CloudFormation templates. A master t
 The main objectives are to provide high availability, support scheduled scaling, store application logs centrally, provision a relational database using Infrastructure as Code, and provide monitoring and serverless functionality.
 
 ## Solution overview
-CloudShirt is a startup from Germany that wants to run its .NET web shop on AWS. This solution deploys the CloudShirt ASP.NET Core 8 application with one command. A single CloudFormation root stack, CloudShirtInfrastructure, creates eight nested stacks. Customers reach the shop through one Application Load Balancer URL, which spreads traffic over web servers in two Availability Zones. The servers use a private Amazon RDS for SQL Server database, write their logs to Amazon EFS and ship them with Filebeat to an Elastic Stack. A script exports the order table to S3, and a serverless API reads those exports.
+CloudShirt is a startup from Germany that wants to run its .NET web shop on AWS. This solution deploys the CloudShirt ASP.NET Core 8 application with one command. A single CloudFormation root stack, CloudShirtInfrastructure, creates nine nested stacks. Customers reach the shop through one Application Load Balancer URL, which spreads traffic over web servers in two Availability Zones. The servers use a private Amazon RDS for SQL Server database, write their logs to Amazon EFS and ship them with Filebeat to an Elastic Stack. A script exports the order table to S3, and a serverless API reads those exports.
 
 ![Overall deployment](./diagrams/deployment.png)
 
@@ -29,7 +29,7 @@ Cloud infrastructure and AWS services: The solution uses AWS services including 
 | Infrastructure as code and automation | main.yaml, provision.sh | Nested stacks, `aws cloudformation package` and `deploy`, one script for create, update and delete. |
 
 
-## Requirements 
+## Requirements - AWS Basics
 | REQ | Solution | Files |
 | --- | --- | --- |
 | REQ-01 | The CloudShirt .NET application runs in an EC2 Auto Scaling Group with a minimum of two instances, distributed across two Availability Zones and registered behind an Application Load Balancer. The ALB provides a single URL for accessing the application and distributes traffic between the available instances. | [05-application.yaml](../templates/05-application.yaml) - launch template, ALB, target group and Auto Scaling Group<br>[01-networking.yaml](../templates/01-networking.yaml) - VPC and subnets in two AZs<br>[userdata.sh](../scripts/userdata.sh) - installs and starts the application |
@@ -40,6 +40,20 @@ Cloud infrastructure and AWS services: The solution uses AWS services including 
 | REQ-06 | The UserData script installs Filebeat on each application instance. It collects the instance's own application logs from `/mnt/cloudshirt-logs/<hostname>/app.log*` and the system log `/var/log/messages` and sends them to Elasticsearch. A Filebeat failure does not stop the application setup. | [userdata.sh](../scripts/userdata.sh) - Filebeat installation and configuration<br>[06-monitoring.yaml](../templates/06-monitoring.yaml) - provides the Elasticsearch address |
 | REQ-07 | The script `export.sh` exports the Orders table from the RDS database to a CSV file with a UTC timestamp in its name and uploads it to the S3 export bucket (`exports/orders/`) with the AWS CLI. It runs on a web server because the database is private, and it can be run repeatedly. | [export.sh](../scripts/export.sh) - the export script<br>[03-storage.yaml](../templates/03-storage.yaml) - the S3 export bucket |
 | REQ-08 | The `07-serverless.yaml` template provisions an AWS Lambda function exposed through an API Gateway REST API. The function summarises the order exports that the REQ-07 script writes to the `exports/orders/` prefix in Amazon S3 and returns them over four read-only routes, so staff can see order totals, buyer counts and, where the export carries prices, unit counts and best-selling products without opening the database. The function is provisioned entirely through CloudFormation and uses an IAM role that can only list and read that prefix. | [07-serverless.yaml](../templates/07-serverless.yaml) - Lambda, API Gateway and IAM role<br>[insights.py](../lambda/order_insights/insights.py) - the Lambda code<br>[main.yaml](../templates/main.yaml) - passes the bucket name and ARN to the stack |
+
+## Requirements - Docker in Cloud
+
+The Docker solution is built from the CloudShirt fork. The Buildserver addition satisfies REQ-09 and prepares the ground for REQ-11 to REQ-13; the remaining requirements are listed with their current status.
+
+| REQ | Solution | Files |
+| --- | --- | --- |
+| REQ-08 | **Met.** The fork contains a multi-stage `Dockerfile` for the web app (SDK build stage, ASP.NET runtime stage) and a `docker-compose.yml` that defines the web, public API and SQL services. | [CloudShirt](https://github.com/athype/CloudShirt) - `src/Web/Dockerfile`, `src/PublicApi/Dockerfile`, `docker-compose.yml` |
+| REQ-09 | **Met.** A separate `CloudShirtBuildserver` EC2 instance runs in private subnet 1 without a public IP. Its UserData installs Docker with the Compose and buildx plugins, git, AWS CLI v2, the ECR credential helper and the SSM agent, and clones the fork. SSH is allowed only from the web servers; normal access is SSM Session Manager. | [09-buildserver.yaml](../templates/09-buildserver.yaml)<br>[01-networking.yaml](../templates/01-networking.yaml) - NAT egress<br>[02-security.yaml](../templates/02-security.yaml) - Buildserver security group<br>[main.yaml](../templates/main.yaml) |
+| REQ-10 | **Partial.** Compose defines and runs the services, but the deploy-time image references must point at ECR before the Swarm deployment. | [CloudShirt](https://github.com/athype/CloudShirt) - `docker-compose.yml` |
+| REQ-11 | **Not yet.** The Buildserver has the tooling and the source; the nightly `build.sh` and its cron/systemd timer are still to be added. | to be added |
+| REQ-12 | **Not yet.** The ECR repository and the push step are still to be added; the credential helper is already configured on the Buildserver. | to be added |
+| REQ-13 | **Not yet.** The Buildserver must run `docker swarm init`, allow ports 2377/7946/4789 and publish the join token to SSM. | to be added |
+| REQ-14 | **Not yet.** The ASG launch template must install Docker and join the Swarm as a worker. | to be added |
 
 ## Application deployment 
 
@@ -99,11 +113,12 @@ Both alarms set `TreatMissingData` to `notBreaching`, so a period without metric
 | Choice | Reason | Trade-off |
 | --- | --- | --- |
 | One root stack with nested stacks | Clear separation by layer, reusable outputs, one create or delete command | Needs packaging; a failed child stack rolls back the whole root stack |
-| Web servers in public subnets, database in private subnets | No NAT gateway cost; the database is not reachable from the internet | Web servers have public IPs and rely on security groups |
+| Web servers in public subnets, database and Buildserver in private subnets | The private subnets have no inbound route; the NAT gateway only provides outbound access for package downloads and ECR | The NAT gateway has an hourly cost; web servers have public IPs and rely on security groups |
 | RDS SQL Server Express | The CloudShirt application is built for SQL Server; the Express edition is the cheapest | Single AZ, size limits |
 | EFS directory per instance plus logrotate | Shared storage survives instance replacement, and separate directories avoid interleaved logs and duplicate indexing | Only application output goes to EFS |
 | Export script runs on EC2 | The database is private, so the script has to run inside the VPC | Needs an instance profile and a running web server |
 | `LabInstanceProfile` for instances | AWS Academy does not allow custom instance roles | Broader permissions than a least-privilege role |
+| Buildserver IAM | `BuildserverInstanceProfile` defaults to `LabInstanceProfile` because AWS Academy blocks custom IAM roles; `CloudShirtBuildserverRole` adds ECR push/pull and SSM access when the parameter is empty | Lab deployments use the broader LabRole instead of the least-privilege role |
 | User data downloaded from GitHub | Instances stay small and the script is versioned; `provision.sh` passes the URL as a parameter | The repository must be readable by the instances; changes must be on `main` |
 | Single-node Elastic Stack with security disabled | Simplest setup for a lab (REQ-05, REQ-06) | Not suitable for production |
 | CloudWatch alarms and dashboard as an extra stack | Metrics and alerting for the ALB and ASG next to the log analysis in Elastic | Alarm email is optional and empty by default |
