@@ -79,10 +79,11 @@ Resources:
         - Key: Name
           Value: CloudShirtDBSecurityGroup
 
-  # Buildserver in the private subnet. It accepts SSH only from the web
-  # servers, which act as the jump host. Day-to-day access goes through SSM
-  # Session Manager, which needs no inbound rule at all. All outbound traffic
-  # is allowed so the instance can reach GitHub and ECR through the NAT gateway.
+  # Buildserver in the private subnet. It accepts SSH from the web servers,
+  # which act as the jump host, and Docker Swarm traffic from them once they
+  # join as workers. Day-to-day access goes through SSM Session Manager, which
+  # needs no inbound rule at all. All outbound traffic is allowed so the
+  # instance can reach GitHub and ECR through the NAT gateway.
   BuildserverSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -94,9 +95,60 @@ Resources:
           ToPort: 22
           SourceSecurityGroupId: !Ref WebServerSecurityGroup
           Description: SSH from the web servers, which act as the jump host
+        - IpProtocol: tcp
+          FromPort: 2377
+          ToPort: 2377
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+          Description: Docker Swarm cluster management from the workers
+        - IpProtocol: tcp
+          FromPort: 7946
+          ToPort: 7946
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+          Description: Docker Swarm node communication from the workers (TCP)
+        - IpProtocol: udp
+          FromPort: 7946
+          ToPort: 7946
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+          Description: Docker Swarm node communication from the workers (UDP)
+        - IpProtocol: udp
+          FromPort: 4789
+          ToPort: 4789
+          SourceSecurityGroupId: !Ref WebServerSecurityGroup
+          Description: Docker Swarm overlay network traffic from the workers (VXLAN)
       Tags:
         - Key: Name
           Value: CloudShirtBuildserverSecurityGroup
+
+  # Separate ingress rules to avoid circular dependencies between security groups
+  WebServerSwarmNodeTcpIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref WebServerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 7946
+      ToPort: 7946
+      SourceSecurityGroupId: !Ref BuildserverSecurityGroup
+      Description: Docker Swarm node communication from the manager (TCP)
+
+  WebServerSwarmNodeUdpIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref WebServerSecurityGroup
+      IpProtocol: udp
+      FromPort: 7946
+      ToPort: 7946
+      SourceSecurityGroupId: !Ref BuildserverSecurityGroup
+      Description: Docker Swarm node communication from the manager (UDP)
+
+  WebServerSwarmOverlayIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref WebServerSecurityGroup
+      IpProtocol: udp
+      FromPort: 4789
+      ToPort: 4789
+      SourceSecurityGroupId: !Ref BuildserverSecurityGroup
+      Description: Docker Swarm overlay network traffic from the manager (VXLAN)
 
   MonitoringSecurityGroup:
     Type: AWS::EC2::SecurityGroup

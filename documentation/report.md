@@ -43,7 +43,7 @@ Cloud infrastructure and AWS services: The solution uses AWS services including 
 
 ## Requirements - Docker in Cloud
 
-The Docker solution is built from the CloudShirt fork. The Buildserver addition satisfies REQ-09, and the ECR stack provisions the private registry used by REQ-12. The remaining requirements are listed with their current status.
+The Docker solution is built from the CloudShirt fork. The Buildserver addition satisfies REQ-09 and REQ-13, and the ECR stack provisions the private registry used by REQ-12. The remaining requirements are listed with their current status.
 
 | REQ | Solution | Files |
 | --- | --- | --- |
@@ -52,7 +52,7 @@ The Docker solution is built from the CloudShirt fork. The Buildserver addition 
 | REQ-10 | **Partial.** Compose defines and runs the services, but the deploy-time image references must point at ECR before the Swarm deployment. | [CloudShirt](https://github.com/athype/CloudShirt) - `docker-compose.yml` |
 | REQ-11 | **Not yet.** The Buildserver has the tooling and the source; the nightly `build.sh` and its cron/systemd timer are still to be added. | to be added |
 | REQ-12 | **Partial.** The private repository `cloudshirt` is provisioned with scan-on-push and a lifecycle policy that keeps the last `ImageRetentionCount` images (default 10). The Buildserver is authenticated through the ECR credential helper; the nightly push step is still to be added. | [10-ecr.yaml](../templates/10-ecr.yaml) - repository, scanning and lifecycle policy<br>[main.yaml](../templates/main.yaml) - ECR stack and outputs |
-| REQ-13 | **Not yet.** The Buildserver must run `docker swarm init`, allow ports 2377/7946/4789 and publish the join token to SSM. | to be added |
+| REQ-13 | **Met.** The Buildserver runs `docker swarm init` with its private IP and publishes the manager IP (`/cloudshirt/swarm/manager-ip`, String) and the worker join token (`/cloudshirt/swarm/worker-join-token`, SecureString) to SSM Parameter Store. The security groups allow TCP 2377, TCP/UDP 7946 and UDP 4789 between the Buildserver and the web servers. | [09-buildserver.yaml](../templates/09-buildserver.yaml) - swarm init and parameter publishing<br>[02-security.yaml](../templates/02-security.yaml) - Swarm ports<br>[main.yaml](../templates/main.yaml) - Buildserver stack |
 | REQ-14 | **Not yet.** The ASG launch template must install Docker and join the Swarm as a worker. | to be added |
 
 ## Application deployment 
@@ -118,7 +118,7 @@ Both alarms set `TreatMissingData` to `notBreaching`, so a period without metric
 | EFS directory per instance plus logrotate | Shared storage survives instance replacement, and separate directories avoid interleaved logs and duplicate indexing | Only application output goes to EFS |
 | Export script runs on EC2 | The database is private, so the script has to run inside the VPC | Needs an instance profile and a running web server |
 | `LabInstanceProfile` for instances | AWS Academy does not allow custom instance roles | Broader permissions than a least-privilege role |
-| Buildserver IAM | `BuildserverInstanceProfile` defaults to `LabInstanceProfile` because AWS Academy blocks custom IAM roles; `CloudShirtBuildserverRole` adds ECR push/pull and SSM access when the parameter is empty | Lab deployments use the broader LabRole instead of the least-privilege role |
+| Buildserver IAM | `BuildserverInstanceProfile` defaults to `LabInstanceProfile` because AWS Academy blocks custom IAM roles; `CloudShirtBuildserverRole` adds ECR push/pull, SSM Session Manager and writes to the Swarm parameters when the parameter is empty | Lab deployments use the broader LabRole instead of the least-privilege role |
 | Amazon ECR instead of Docker Hub | Private by default, IAM authentication without stored passwords, scan-on-push and a lifecycle policy | The registry is tied to AWS, and the images are deleted with the stack |
 | User data downloaded from GitHub | Instances stay small and the script is versioned; `provision.sh` passes the URL as a parameter | The repository must be readable by the instances; changes must be on `main` |
 | Single-node Elastic Stack with security disabled | Simplest setup for a lab (REQ-05, REQ-06) | Not suitable for production |
