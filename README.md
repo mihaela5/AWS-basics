@@ -180,10 +180,28 @@ The root stack outputs `BuildserverInstanceId` and `BuildserverPrivateIp`.
 
 ### Instance profile
 
-`BuildserverInstanceProfile` defaults to `LabInstanceProfile`, because AWS Academy Learner Lab does not allow custom IAM roles. In an account that does, pass an empty value and the Buildserver stack creates `CloudShirtBuildserverRole` and `CloudShirtBuildserverInstanceProfile` with the `AmazonEC2ContainerRegistryPowerUser` and `AmazonSSMManagedInstanceCore` policies:
+`BuildserverInstanceProfile` defaults to `LabInstanceProfile`, because AWS Academy Learner Lab does not allow custom IAM roles. In an account that does, pass an empty value and the Buildserver stack creates `CloudShirtBuildserverRole` and `CloudShirtBuildserverInstanceProfile` with the `AmazonEC2ContainerRegistryPowerUser` and `AmazonSSMManagedInstanceCore` policies, plus an inline policy that allows publishing the Swarm parameters:
 
 ```bash
 bash scripts/provision.sh --buildserver-instance-profile ""
+```
+
+### Swarm manager
+
+The Buildserver runs `docker swarm init` in its UserData and advertises its private IP, because it has no public address. It then publishes the two values a worker needs:
+
+| SSM parameter | Type | Value |
+| --- | --- | --- |
+| `/cloudshirt/swarm/manager-ip` | `String` | the Buildserver's private IPv4 |
+| `/cloudshirt/swarm/worker-join-token` | `SecureString` | the output of `docker swarm join-token -q worker` |
+
+Both are written with `--overwrite`, so a replaced Buildserver refreshes them. The manager IP is a plain `String` because it is not secret; only the join token is encrypted. To read them:
+
+```bash
+aws ssm get-parameter --name /cloudshirt/swarm/manager-ip \
+  --query Parameter.Value --output text
+aws ssm get-parameter --name /cloudshirt/swarm/worker-join-token \
+  --with-decryption --query Parameter.Value --output text
 ```
 
 ---

@@ -30,6 +30,14 @@ Parameters:
     Default: main
     Description: Branch cloned into /opt/CloudShirt on first boot
 
+  SwarmParameterPrefix:
+    Type: String
+    Default: /cloudshirt/swarm
+    Description: >
+      SSM Parameter Store path where the Buildserver publishes the Swarm
+      manager IP and the worker join token. The worker user data reads the
+      same path when it joins the cluster.
+
   InstanceProfileName:
     Type: String
     Default: LabInstanceProfile
@@ -46,14 +54,14 @@ Resources:
 
   # AWS Academy Learner Lab does not allow custom IAM roles, so the stack
   # defaults to the pre-created LabInstanceProfile. Pass an empty
-  # InstanceProfileName to create this least-privilege role instead; the
-  # managed policies cover ECR push/pull and SSM Session Manager.
+  # InstanceProfileName to create this least-privilege role instead; it
+  # covers ECR push/pull, SSM Session Manager and Swarm parameter publishing.
   BuildserverRole:
     Type: AWS::IAM::Role
     Condition: CreateInstanceProfile
     Properties:
       RoleName: CloudShirtBuildserverRole
-      Description: CloudShirt Buildserver - ECR push/pull and SSM Session Manager
+      Description: CloudShirt Buildserver - ECR push/pull, SSM Session Manager and Swarm parameters
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -64,6 +72,15 @@ Resources:
       ManagedPolicyArns:
         - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser"
         - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      Policies:
+        - PolicyName: CloudShirtBuildserverSwarmParameters
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:PutParameter
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SwarmParameterPrefix}/*"
       Tags:
         - Key: Name
           Value: CloudShirtBuildserverRole
@@ -150,6 +167,34 @@ Resources:
           aws --version
           git --version
 
+          # Docker Swarm manager
+          until docker info >/dev/null 2>&1; do
+            sleep 2
+          done
+
+          IMDS_TOKEN="$(curl -fsS -X PUT "http://169.254.169.254/latest/api/token" \
+            -H "X-aws-ec2-metadata-token-ttl-seconds: 60")"
+          PRIVATE_IP="$(curl -fsS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+            http://169.254.169.254/latest/meta-data/local-ipv4)"
+
+          if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
+            docker swarm init --advertise-addr "$PRIVATE_IP" >/dev/null
+          fi
+
+          WORKER_JOIN_TOKEN="$(docker swarm join-token -q worker)"
+          aws ssm put-parameter \
+            --name "${SwarmParameterPrefix}/manager-ip" \
+            --type String \
+            --value "$PRIVATE_IP" \
+            --overwrite
+          aws ssm put-parameter \
+            --name "${SwarmParameterPrefix}/worker-join-token" \
+            --type SecureString \
+            --value "$WORKER_JOIN_TOKEN" \
+            --overwrite
+
+          docker info --format 'Swarm state: {{.Swarm.LocalNodeState}}'
+
           echo "CloudShirt Buildserver provisioning completed."
 
 Outputs:
@@ -161,6 +206,14 @@ Outputs:
   PrivateIp:
     Description: Private IP address of the CloudShirt Buildserver
     Value: !GetAtt Buildserver.PrivateIp
+
+  SwarmManagerIpParameterName:
+    Description: SSM parameter holding the Swarm manager private IP
+    Value: !Sub "${SwarmParameterPrefix}/manager-ip"
+
+  SwarmWorkerTokenParameterName:
+    Description: SSM SecureString parameter holding the worker join token
+    Value: !Sub "${SwarmParameterPrefix}/worker-join-token"
 
   InstanceProfileUsed:
     Description: Instance profile attached to the Buildserver
