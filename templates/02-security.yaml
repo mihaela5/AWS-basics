@@ -79,11 +79,7 @@ Resources:
         - Key: Name
           Value: CloudShirtDBSecurityGroup
 
-  # Buildserver in the private subnet. It accepts SSH from the web servers,
-  # which act as the jump host, and Docker Swarm traffic from them once they
-  # join as workers. Day-to-day access goes through SSM Session Manager, which
-  # needs no inbound rule at all. All outbound traffic is allowed so the
-  # instance can reach GitHub and ECR through the NAT gateway.
+  # Buildserver in the private subnet. It accepts SSH from the web servers, outbound traffic is allowed to access registries
   BuildserverSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
