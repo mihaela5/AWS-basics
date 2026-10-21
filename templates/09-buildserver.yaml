@@ -195,6 +195,35 @@ Resources:
 
           echo "CloudShirt Buildserver provisioning completed."
 
+          # Docker Swarm manager
+          until docker info >/dev/null 2>&1; do
+            sleep 2
+          done
+
+          IMDS_TOKEN="$(curl -fsS -X PUT "http://169.254.169.254/latest/api/token" \
+            -H "X-aws-ec2-metadata-token-ttl-seconds: 60")"
+          PRIVATE_IP="$(curl -fsS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+            http://169.254.169.254/latest/meta-data/local-ipv4)"
+
+          if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
+            docker swarm init --advertise-addr "$PRIVATE_IP" >/dev/null
+          fi
+
+          WORKER_JOIN_TOKEN="$(docker swarm join-token -q worker)"
+          aws ssm put-parameter \
+            --name "${SwarmParameterPrefix}/manager-ip" \
+            --type String \
+            --value "$PRIVATE_IP" \
+            --overwrite
+          aws ssm put-parameter \
+            --name "${SwarmParameterPrefix}/worker-join-token" \
+            --type SecureString \
+            --value "$WORKER_JOIN_TOKEN" \
+            --overwrite
+
+          docker info --format 'Swarm state: {{.Swarm.LocalNodeState}}'
+
+
 Outputs:
 
   InstanceId:
