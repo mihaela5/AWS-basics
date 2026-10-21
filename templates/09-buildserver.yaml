@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Buildserver in the private subnet - builds the CloudShirt images and pushes them to ECR.
+Description: Buildserver in the private subnet - builds the CloudShirt images nightly and pushes them to ECR.
 
 Parameters:
 
@@ -37,6 +37,11 @@ Parameters:
       SSM Parameter Store path where the Buildserver publishes the Swarm
       manager IP and the worker join token. The worker user data reads the
       same path when it joins the cluster.
+
+  BuildSchedule:
+    Type: String
+    Default: "0 2 * * *"
+    Description: Cron schedule of the nightly build 
 
   InstanceProfileName:
     Type: String
@@ -120,8 +125,9 @@ Resources:
 
           # Base tooling. amazon-ssm-agent is preinstalled on the standard
           # AL2023 AMI, but installing it keeps minimal AMIs working too.
+          # cronie provides crond for the nightly build schedule.
           dnf update -y
-          dnf install -y docker git awscli-2 amazon-ssm-agent amazon-ecr-credential-helper
+          dnf install -y docker git awscli-2 amazon-ssm-agent amazon-ecr-credential-helper cronie
 
           # AL2023 does not package the Docker Compose or buildx plugins, so
           # install the pinned upstream binaries where the docker CLI looks.
@@ -136,6 +142,7 @@ Resources:
 
           systemctl enable --now docker
           systemctl enable --now amazon-ssm-agent
+          systemctl enable --now crond
           usermod -aG docker ec2-user
 
           # Docker asks the ECR credential helper for a token, and the helper signs it with the instance profile. No password is stored on disk.
@@ -161,39 +168,30 @@ Resources:
           fi
           chown -R ec2-user:ec2-user /opt/CloudShirt
 
+          # Nightly build: download build.sh from the AWS-basics repo and schedule it.
+          curl -fsSL "https://raw.githubusercontent.com/${ScriptRepository}/${ScriptBranch}/scripts/build.sh" \
+            -o /opt/build.sh
+          chmod +x /opt/build.sh
+          echo "${BuildSchedule} root /opt/build.sh" > /etc/cron.d/nightly-build
+          chmod 644 /etc/cron.d/nightly-build
+
+          # build.sh logs to /var/log/nightly-build.log; keep that file from growing forever.
+          touch /var/log/nightly-build.log
+          cat > /etc/logrotate.d/nightly-build <<'LOGROTATE'
+          /var/log/nightly-build.log {
+              weekly
+              rotate 4
+              missingok
+              notifempty
+              copytruncate
+          }
+          LOGROTATE
+
           docker --version
           docker compose version
           docker buildx version
           aws --version
           git --version
-
-          # Docker Swarm manager
-          until docker info >/dev/null 2>&1; do
-            sleep 2
-          done
-
-          IMDS_TOKEN="$(curl -fsS -X PUT "http://169.254.169.254/latest/api/token" \
-            -H "X-aws-ec2-metadata-token-ttl-seconds: 60")"
-          PRIVATE_IP="$(curl -fsS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
-            http://169.254.169.254/latest/meta-data/local-ipv4)"
-
-          if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
-            docker swarm init --advertise-addr "$PRIVATE_IP" >/dev/null
-          fi
-
-          WORKER_JOIN_TOKEN="$(docker swarm join-token -q worker)"
-          aws ssm put-parameter \
-            --name "${SwarmParameterPrefix}/manager-ip" \
-            --type String \
-            --value "$PRIVATE_IP" \
-            --overwrite
-          aws ssm put-parameter \
-            --name "${SwarmParameterPrefix}/worker-join-token" \
-            --type SecureString \
-            --value "$WORKER_JOIN_TOKEN" \
-            --overwrite
-
-          docker info --format 'Swarm state: {{.Swarm.LocalNodeState}}'
 
           echo "CloudShirt Buildserver provisioning completed."
 
