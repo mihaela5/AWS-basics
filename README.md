@@ -204,6 +204,16 @@ aws ssm get-parameter --name /cloudshirt/swarm/worker-join-token \
   --with-decryption --query Parameter.Value --output text
 ```
 
+The manager also pins the Swarm address pool to `10.100.0.0/16` (`--default-addr-pool`). Docker otherwise allocates overlay and ingress subnets from `10.0.0.0/8`, which overlaps the default VPC CIDR `10.0.0.0/16`. The flags only apply at `swarm init`, so a replacement of the Buildserver is the way to change the pool.
+
+### Swarm workers
+
+The ASG launch template (`templates/05-application.yaml`) installs Docker and the AWS CLI on every web server and joins it to the cluster as a worker. It reads the two parameters above from SSM and retries for up to 10 minutes (60 attempts, 10 seconds apart), because CloudFormation treats the Buildserver stack as complete before its UserData has published them. The worker security group also allows 7946 and 4789 between the workers themselves, because Swarm gossip and overlay traffic is peer-to-peer.
+
+`WebServerInstanceProfile` is the worker counterpart of `BuildserverInstanceProfile`. It defaults to `LabInstanceProfile`; pass an empty value to create `CloudShirtWebServerRole` with `AmazonEC2ContainerRegistryReadOnly` and an inline `ssm:GetParameter` policy scoped to the two Swarm parameters:
+
+Replacing the Buildserver creates a new swarm and invalidates the previous join token; workers must be replaced or refreshed after that. Changing the manager's UserData (for example, the address-pool flags) replaces the instance on the next stack update, because CloudFormation treats UserData as replacement-only.
+
 ---
 
 ## 8. ECR registry

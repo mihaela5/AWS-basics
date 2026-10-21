@@ -146,6 +146,36 @@ Resources:
       SourceSecurityGroupId: !Ref BuildserverSecurityGroup
       Description: Docker Swarm overlay network traffic from the manager (VXLAN)
 
+  WebServerSwarmNodeTcpSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref WebServerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 7946
+      ToPort: 7946
+      SourceSecurityGroupId: !Ref WebServerSecurityGroup
+      Description: Docker Swarm node communication between workers (TCP)
+
+  WebServerSwarmNodeUdpSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref WebServerSecurityGroup
+      IpProtocol: udp
+      FromPort: 7946
+      ToPort: 7946
+      SourceSecurityGroupId: !Ref WebServerSecurityGroup
+      Description: Docker Swarm node communication between workers (UDP)
+
+  WebServerSwarmOverlaySelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref WebServerSecurityGroup
+      IpProtocol: udp
+      FromPort: 4789
+      ToPort: 4789
+      SourceSecurityGroupId: !Ref WebServerSecurityGroup
+      Description: Docker Swarm overlay network traffic between workers (VXLAN)
+
   MonitoringSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:

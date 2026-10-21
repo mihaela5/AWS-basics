@@ -205,8 +205,15 @@ Resources:
           PRIVATE_IP="$(curl -fsS -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
             http://169.254.169.254/latest/meta-data/local-ipv4)"
 
+          # Swarm allocates overlay and ingress subnets from 10.0.0.0/8 by
+          # default, which overlaps this VPC (10.0.0.0/16). Pin a pool outside
+          # the VPC. These flags only apply at init, so changing the pool
+          # later requires recreating the cluster.
           if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
-            docker swarm init --advertise-addr "$PRIVATE_IP" >/dev/null
+            docker swarm init --advertise-addr "$PRIVATE_IP" \
+              --default-addr-pool 10.100.0.0/16 \
+              --default-addr-pool-mask-length 24 \
+              >/dev/null
           fi
 
           WORKER_JOIN_TOKEN="$(docker swarm join-token -q worker)"

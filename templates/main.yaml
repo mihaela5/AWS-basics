@@ -17,6 +17,15 @@ Parameters:
       default. Pass an empty value to let the Buildserver stack create a
       least-privilege role with ECR push/pull and SSM Session Manager access.
 
+  WebServerInstanceProfile:
+    Type: String
+    Default: LabInstanceProfile
+    Description: >
+      Existing EC2 instance profile for the web servers. AWS Academy Learner
+      Lab does not allow custom IAM roles, so LabInstanceProfile is the
+      default. Pass an empty value to let the application stack create a
+      least-privilege role with ECR pull and Swarm parameter read access.
+
   ImageRetentionCount:
     Type: Number
     Default: 10
@@ -98,9 +107,10 @@ Resources:
         DBUsername: !Ref DBUsername
         DBPassword: !Ref DBPassword
 
+  # DependsOn BuildserverStack makes the manager stack finish first.
   ApplicationStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: [NetworkingStack, SecurityStack, StorageStack, DatabaseStack, MonitoringStack]
+    DependsOn: [NetworkingStack, SecurityStack, BuildserverStack, StorageStack, DatabaseStack, MonitoringStack]
     Properties:
       TemplateURL: ./05-application.yaml
       Parameters:
@@ -117,6 +127,9 @@ Resources:
         ElasticsearchPrivateIP: !GetAtt MonitoringStack.Outputs.ElasticsearchPrivateIP
         KeyName: !Ref KeyName
         UserDataScriptUrl: !Ref UserDataScriptUrl
+        InstanceProfileName: !Ref WebServerInstanceProfile
+        SwarmManagerIpParameterName: !GetAtt BuildserverStack.Outputs.SwarmManagerIpParameterName
+        SwarmWorkerTokenParameterName: !GetAtt BuildserverStack.Outputs.SwarmWorkerTokenParameterName
 
   MonitoringStack:
     Type: AWS::CloudFormation::Stack
@@ -194,6 +207,10 @@ Outputs:
   ApplicationStackOutput:
     Description: "Application Stack ID"
     Value: !Ref ApplicationStack
+
+  AutoScalingGroupName:
+    Description: "Name of the CloudShirt Auto Scaling Group (for scaling and instance refresh)"
+    Value: !GetAtt ApplicationStack.Outputs.AutoScalingGroupName
 
   MonitoringStackOutput:
     Description: "Monitoring Stack ID"
