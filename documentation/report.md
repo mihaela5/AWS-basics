@@ -43,7 +43,7 @@ Cloud infrastructure and AWS services: The solution uses AWS services including 
 
 ## Requirements - Docker in Cloud
 
-The Docker solution is built from the CloudShirt fork. The Buildserver addition satisfies REQ-09 and REQ-13, and the ECR stack provisions the private registry used by REQ-12. The remaining requirements are listed with their current status.
+The Docker solution is built from the CloudShirt fork. The Buildserver addition satisfies REQ-09 and REQ-13, the ASG worker configuration satisfies REQ-14, and the ECR stack provisions the private registry used by REQ-12. The remaining requirements are listed with their current status.
 
 | REQ | Solution | Files |
 | --- | --- | --- |
@@ -53,13 +53,13 @@ The Docker solution is built from the CloudShirt fork. The Buildserver addition 
 | REQ-11 | **Not yet.** The Buildserver has the tooling and the source; the nightly `build.sh` and its cron/systemd timer are still to be added. | to be added |
 | REQ-12 | **Partial.** The private repository `cloudshirt` is provisioned with scan-on-push and a lifecycle policy that keeps the last `ImageRetentionCount` images (default 10). The Buildserver is authenticated through the ECR credential helper; the nightly push step is still to be added. | [10-ecr.yaml](../templates/10-ecr.yaml) - repository, scanning and lifecycle policy<br>[main.yaml](../templates/main.yaml) - ECR stack and outputs |
 | REQ-13 | **Met.** The Buildserver runs `docker swarm init` with its private IP and publishes the manager IP (`/cloudshirt/swarm/manager-ip`, String) and the worker join token (`/cloudshirt/swarm/worker-join-token`, SecureString) to SSM Parameter Store. The security groups allow TCP 2377, TCP/UDP 7946 and UDP 4789 between the Buildserver and the web servers. | [09-buildserver.yaml](../templates/09-buildserver.yaml) - swarm init and parameter publishing<br>[02-security.yaml](../templates/02-security.yaml) - Swarm ports<br>[main.yaml](../templates/main.yaml) - Buildserver stack |
-| REQ-14 | **Not yet.** The ASG launch template must install Docker and join the Swarm as a worker. | to be added |
+| REQ-14 | **Met.** The ASG launch template installs Docker and the AWS CLI. On first boot each web server reads the manager IP and worker token from SSM Parameter Store, retries until the manager is ready, and runs `docker swarm join`. `WebServerInstanceProfile` defaults to `LabInstanceProfile`; when the stack creates the role instead, it gets `AmazonEC2ContainerRegistryReadOnly` and an inline `ssm:GetParameter` policy scoped to the two Swarm parameters. The security groups also allow 7946 and 4789 between the workers themselves, because overlay traffic is peer-to-peer. `docker node ls` on the Buildserver lists the ASG instances as workers, and scaling the group adds and removes nodes. | [05-application.yaml](../templates/05-application.yaml) - launch template, worker role and join<br>[main.yaml](../templates/main.yaml) - Buildserver dependency and parameter forwarding<br>[02-security.yaml](../templates/02-security.yaml) - Swarm ports |
 
 ## Application deployment 
 
 `05-application.yaml` creates everything that serves the CloudShirt shop: the load balancer, the web servers and the scaling rules. It covers `REQ-01` (high availability behind one URL) and `REQ-02` (scale out between 18:00 and 20:00 Eastern). The web servers set themselves up with userdata.sh, which also covers the mounting side of `REQ-03` and the Filebeat part of `REQ-06`.
 
-The launch template passes the settings to every new instance as environment variables and downloads `userdata.sh` from GitHub. The EFS mount and Filebeat steps are allowed to fail without stopping the application. The load balancer starts sending traffic as soon as the health check passes.
+The launch template passes the settings to every new instance as environment variables and downloads `userdata.sh` from GitHub. Before that script runs, the instance installs Docker and joins the Buildserver's Swarm as a worker; the join reads the manager IP and token from SSM Parameter Store and retries, because the manager's UserData finishes after CloudFormation marks the Buildserver stack complete. The EFS mount and Filebeat steps are allowed to fail without stopping the application. The load balancer starts sending traffic as soon as the health check passes.
 
 ![User data flow](./diagrams/userdata-flow.png)
 
@@ -119,8 +119,11 @@ Both alarms set `TreatMissingData` to `notBreaching`, so a period without metric
 | Export script runs on EC2 | The database is private, so the script has to run inside the VPC | Needs an instance profile and a running web server |
 | `LabInstanceProfile` for instances | AWS Academy does not allow custom instance roles | Broader permissions than a least-privilege role |
 | Buildserver IAM | `BuildserverInstanceProfile` defaults to `LabInstanceProfile` because AWS Academy blocks custom IAM roles; `CloudShirtBuildserverRole` adds ECR push/pull, SSM Session Manager and writes to the Swarm parameters when the parameter is empty | Lab deployments use the broader LabRole instead of the least-privilege role |
+| Worker IAM | `WebServerInstanceProfile` defaults to `LabInstanceProfile`; when the stack creates `CloudShirtWebServerRole`, it grants only `AmazonEC2ContainerRegistryReadOnly` and `ssm:GetParameter` on the two Swarm parameters | Lab deployments use the broader LabRole instead of the least-privilege role |
 | Amazon ECR instead of Docker Hub | Private by default, IAM authentication without stored passwords, scan-on-push and a lifecycle policy | The registry is tied to AWS, and the images are deleted with the stack |
 | User data downloaded from GitHub | Instances stay small and the script is versioned; `provision.sh` passes the URL as a parameter | The repository must be readable by the instances; changes must be on `main` |
+| Swarm worker bootstrap from SSM | The launch template reads the manager IP and join token from Parameter Store and retries; no token is stored in the template or on disk | Workers need `ssm:GetParameter`, and the instance profile must be able to read the parameters |
+| Swarm pool outside the VPC CIDR | `--default-addr-pool 10.100.0.0/16` prevents Docker's default `10.0.0.0/8` pool from overlapping the VPC `10.0.0.0/16` | The pool cannot be changed without recreating the cluster |
 | Single-node Elastic Stack with security disabled | Simplest setup for a lab (REQ-05, REQ-06) | Not suitable for production |
 | CloudWatch alarms and dashboard as an extra stack | Metrics and alerting for the ALB and ASG next to the log analysis in Elastic | Alarm email is optional and empty by default |
 
@@ -130,15 +133,15 @@ Both alarms set `TreatMissingData` to `notBreaching`, so a period without metric
 ## 6. Roll-out
 
 1. **Prerequisites:** AWS CLI v2, active AWS Academy credentials (refresh them whenever the lab restarts), the key pair `vockey`, and the repository pushed to GitHub with `scripts/userdata.sh` on `main`.
-2. **Deploy:** run `bash scripts/provision.sh`. It checks the credentials, creates the staging bucket `cloudshirt-cfn-staging-<account id>`, packages the nested templates and the Lambda code, and creates or updates the root stack. This takes more than 10 minutes; RDS is the slowest part. Options include `--region`, `--stack-name`, `--key-name`, `--db-username`, `--db-password`, `--delete` and `--yes`.
+2. **Deploy:** run `bash scripts/provision.sh`. It checks the credentials, creates the staging bucket `cloudshirt-cfn-staging-<account id>`, packages the nested templates and the Lambda code, and creates or updates the root stack. This takes more than 10 minutes; RDS is the slowest part. Options include `--region`, `--stack-name`, `--key-name`, `--db-username`, `--db-password`, `--buildserver-instance-profile`, `--webserver-instance-profile`, `--delete` and `--yes`.
 3. **Outputs:** the script prints the outputs of the root and nested stacks: `LoadBalancerDNS` (shop URL), `KibanaURL`, `OrderInsightsApiEndpoint` and `OrderExportBucketName`.
-4. **Verify:** open `http://<LoadBalancerDNS>`; check that the targets are healthy; place a test order; run `scripts/export.sh` on a web server and list the bucket; open Kibana on port 5601 and look for the logs; call the API endpoint.
+4. **Verify:** open `http://<LoadBalancerDNS>`; check that the targets are healthy; on the Buildserver run `docker node ls` and confirm the web servers are workers; scale the ASG out and back in and confirm the node list follows; place a test order; run `scripts/export.sh` on a web server and list the bucket; open Kibana on port 5601 and look for the logs; call the API endpoint.
 5. **Tear down:** `bash scripts/provision.sh --delete`. The export bucket (`DeletionPolicy: Retain`), the staging bucket and the final RDS snapshot are kept on purpose and can be removed manually.
 
 Stack updates change the launch template, but running instances are not replaced automatically. Start an instance refresh on the Auto Scaling Group or replace the instances to apply the change.
 
 
-## Recommmendations 
+## Recommendations 
 - **Secrets:** the database password has a default in the templates and is passed through user data. Use AWS Secrets Manager or SSM Parameter Store and remove the defaults.
 - **Network exposure:** SSH (22) and Kibana (5601) are open to the internet and the web servers still allow direct port 80 access. Restrict them to known IP ranges, use SSM Session Manager instead of SSH, and remove the temporary port 80 rule.
 - **HTTPS:** add an ACM certificate and an HTTPS listener (with a Route 53 name) so that customers do not use plain HTTP.

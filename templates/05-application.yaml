@@ -60,8 +60,66 @@ Parameters:
     Type: String
     Description: Private IP address of the Elastic Stack monitoring instance
 
+  InstanceProfileName:
+    Type: String
+    Default: LabInstanceProfile
+    Description: >
+      Existing instance profile for the web servers. AWS Academy Learner Lab
+      does not allow custom IAM roles, so LabInstanceProfile is the default.
+      Leave this empty to create a least-privilege role with ECR pull and SSM
+      parameter read access.
+
+  SwarmManagerIpParameterName:
+    Type: String
+    Description: SSM parameter holding the Swarm manager private IP
+
+  SwarmWorkerTokenParameterName:
+    Type: String
+    Description: SSM SecureString parameter holding the worker join token
+
+Conditions:
+  CreateInstanceProfile: !Equals [!Ref InstanceProfileName, ""]
 
 Resources:
+
+  # Created only when InstanceProfileName is empty.
+  WebServerRole:
+    Type: AWS::IAM::Role
+    Condition: CreateInstanceProfile
+    Properties:
+      RoleName: CloudShirtWebServerRole
+      Description: CloudShirt web servers - Swarm workers and ECR pull
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+      Policies:
+        - PolicyName: CloudShirtWebServerSwarmWorker
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SwarmManagerIpParameterName}"
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SwarmWorkerTokenParameterName}"
+      Tags:
+        - Key: Name
+          Value: CloudShirtWebServerRole
+
+  WebServerInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: CreateInstanceProfile
+    Properties:
+      InstanceProfileName: CloudShirtWebServerInstanceProfile
+      Roles:
+        - !Ref WebServerRole
 
   # Launch Template used by the Auto Scaling Group to create
   # CloudShirt application instances.
@@ -76,7 +134,7 @@ Resources:
         KeyName: !Ref KeyName
         
         IamInstanceProfile:
-          Name: LabInstanceProfile
+          Name: !If [CreateInstanceProfile, !Ref WebServerInstanceProfile, !Ref InstanceProfileName]
 
         SecurityGroupIds:
           - !Ref WebServerSecurityGroupId
@@ -84,7 +142,7 @@ Resources:
         UserData:
           Fn::Base64: !Sub |
             #!/bin/bash
-            set -e
+            set -euo pipefail
 
             export FILE_SYSTEM_ID="${FileSystemId}"
             export DB_ENDPOINT="${DBEndpoint}"
@@ -92,7 +150,47 @@ Resources:
             export DB_USERNAME="${DBUsername}"
             export DB_PASSWORD="${DBPassword}"
             export ELASTICSEARCH_PRIVATE_IP="${ElasticsearchPrivateIP}"
+            export AWS_DEFAULT_REGION="${AWS::Region}"
 
+            # Docker Swarm worker
+            dnf install -y docker awscli-2
+            systemctl enable --now docker
+            until docker info >/dev/null 2>&1; do
+              sleep 2
+            done
+
+            if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
+              MANAGER_IP=""
+              JOIN_TOKEN=""
+              for attempt in $(seq 1 60); do
+                # The Buildserver publishes both parameters from its own
+                # UserData, which may still be running: retry until it does.
+                if MANAGER_IP="$(aws ssm get-parameter \
+                      --name "${SwarmManagerIpParameterName}" \
+                      --query Parameter.Value --output text 2>/dev/null)" \
+                   && JOIN_TOKEN="$(aws ssm get-parameter \
+                      --name "${SwarmWorkerTokenParameterName}" \
+                      --with-decryption \
+                      --query Parameter.Value --output text 2>/dev/null)"; then
+                  if docker swarm join --token "$JOIN_TOKEN" "$MANAGER_IP:2377"; then
+                    break
+                  fi
+                fi
+
+                if [ "$attempt" -eq 60 ]; then
+                  echo "ERROR: could not join the Swarm after 60 attempts. Check that the instance profile allows ssm:GetParameter on ${SwarmManagerIpParameterName} and ${SwarmWorkerTokenParameterName}, and that the Buildserver published them." >&2
+                  exit 1
+                fi
+
+                echo "Swarm manager not ready (attempt $attempt/60); retrying in 10 seconds..."
+                sleep 10
+              done
+              unset JOIN_TOKEN
+            fi
+
+            docker info --format 'Swarm state: {{.Swarm.LocalNodeState}}'
+
+            # Application
             curl -fsSL "${UserDataScriptUrl}" -o /tmp/userdata.sh
             chmod +x /tmp/userdata.sh
             /tmp/userdata.sh
@@ -181,7 +279,8 @@ Resources:
         - !Ref CloudShirtTargetGroup
 
       HealthCheckType: ELB
-      HealthCheckGracePeriod: 600
+      # Above the worst-case bootstrap: Docker install, up to 10 minutes of Swarm join retries, and the existing dotnet publish.
+      HealthCheckGracePeriod: 1200
 
       Tags:
         - Key: Name
