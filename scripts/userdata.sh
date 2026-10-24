@@ -2,14 +2,12 @@
 set -e
 
 export HOME=/root
-export DOTNET_CLI_HOME=/root
 
-echo "Starting CloudShirt provisioning..."
+echo "Starting CloudShirt worker provisioning..."
 
-# Install dependencies
-dnf update -y
-dnf install -y git amazon-efs-utils dotnet-sdk-8.0 logrotate
-
+# The app runs as a Swarm service; prepare only the shared logs and log shipper.
+# Avoid a full dnf update here: it restarts Docker and drops the Swarm node.
+dnf install -y amazon-efs-utils
 
 # EFS
 mkdir -p /mnt/cloudshirt-logs
@@ -27,124 +25,15 @@ else
     echo "WARNING: EFS mount failed. Continuing CloudShirt deployment."
 fi
 
-# Each instance writes its logs to its own directory on the shared EFS.
-# One shared log file would interleave the output of all instances and make
-# every instance's log rotation fight over the same file.
-INSTANCE_NAME="$(hostname -s 2>/dev/null || uname -n)"
-
- 
-# Download CloudShirt
-cd /opt
-
-if [ ! -d "/opt/CloudShirt" ]; then
-    git clone https://github.com/looking4ward/CloudShirt.git
+# Filebeat is optional; disable with ENABLE_FILEBEAT=false.
+ENABLE_FILEBEAT="${ENABLE_FILEBEAT:-true}"
+if [ "$ENABLE_FILEBEAT" != "true" ]; then
+    echo "Skipping Filebeat (ENABLE_FILEBEAT=false)."
+    echo "CloudShirt worker provisioning completed successfully."
+    exit 0
 fi
 
-cd /opt/CloudShirt/src/Web
-
- 
-# Configure Amazon RDS
-sed -i \
-'s|Server=(localdb)\\\\mssqllocaldb;Integrated Security=true;Initial Catalog=Microsoft.eShopOnWeb.CatalogDb;|Server='"${DB_ENDPOINT}"','"${DB_PORT}"';User ID='"${DB_USERNAME}"';Password='"${DB_PASSWORD}"';Initial Catalog=Microsoft.eShopOnWeb.CatalogDb;TrustServerCertificate=True;|' \
-appsettings.json
-
-sed -i \
-'s|Server=(localdb)\\\\mssqllocaldb;Integrated Security=true;Initial Catalog=Microsoft.eShopOnWeb.Identity;|Server='"${DB_ENDPOINT}"','"${DB_PORT}"';User ID='"${DB_USERNAME}"';Password='"${DB_PASSWORD}"';Initial Catalog=Microsoft.eShopOnWeb.Identity;TrustServerCertificate=True;|' \
-appsettings.json
-
- 
-# Publish CloudShirt
-mkdir -p /opt/cloudshirt/release
-
-dotnet publish \
-    -c Release \
-    -o /opt/cloudshirt/release
-
- 
-# Wrapper that appends the application output to the log file on EFS.
-# It keeps the logs of every instance in its own directory, because all
-# instances share the same EFS filesystem.
-cat > /opt/cloudshirt/run.sh <<'EOF'
-#!/bin/bash
-LOG_DIR="/mnt/cloudshirt-logs/$(hostname -s 2>/dev/null || uname -n)"
-
-if ! mountpoint -q /mnt/cloudshirt-logs; then
-    echo "WARNING: /mnt/cloudshirt-logs is not mounted; writing logs to local disk." >&2
-fi
-
-mkdir -p "$LOG_DIR"
-exec /usr/bin/dotnet /opt/cloudshirt/release/Web.dll >> "$LOG_DIR/app.log" 2>&1
-EOF
-
-chmod +x /opt/cloudshirt/run.sh
-
-# Create systemd service
-cat > /etc/systemd/system/cloudshirt.service <<'EOF'
-[Unit]
-Description=CloudShirt ASP.NET Core Application
-# Wait for the EFS mount from fstab so the log directory is really the EFS
-# filesystem. A failed mount does not block the application: availability
-# wins over logging.
-After=network.target remote-fs.target
-
-[Service]
-WorkingDirectory=/opt/cloudshirt/release
-ExecStart=/opt/cloudshirt/run.sh
-
-Restart=always
-RestartSec=10
-
-KillSignal=SIGINT
-
-User=root
-
-Environment=ASPNETCORE_ENVIRONMENT=Development
-Environment=ASPNETCORE_URLS=http://0.0.0.0:80
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
- 
-# Enable and start application and filebeat
-systemctl daemon-reload
-systemctl enable cloudshirt
-systemctl restart cloudshirt
-
-echo "CloudShirt service started."
-
-
-# Rotate the application log daily on EFS (REQ-03: log files stored on a
-# daily basis). logrotate renames the current log file to app.log-YYYY-MM-DD
-# and creates a new app.log; the service restart lets the application reopen it.
-# dateyesterday names the file after the day the logs were written, because
-# rotation runs shortly after midnight.
-cat > /etc/logrotate.d/cloudshirt << EOF
-/mnt/cloudshirt-logs/${INSTANCE_NAME}/app.log {
-    daily
-    dateext
-    dateyesterday
-    dateformat -%Y-%m-%d
-    rotate 7
-    missingok
-    notifempty
-    create 0644 root root
-
-    postrotate
-        systemctl restart cloudshirt.service
-    endscript
-}
-EOF
-
-# On Amazon Linux 2023 logrotate is triggered by a systemd timer.
-if systemctl cat logrotate.timer >/dev/null 2>&1; then
-    systemctl enable --now logrotate.timer
-else
-    echo "WARNING: logrotate.timer not found; verify that daily log rotation is triggered."
-fi
-
-
-# Install Filebeat AFTER CloudShirt
+# Install and configure Filebeat
 echo "Installing and configuring Filebeat..."
 
 # A Filebeat failure must not stop the CloudShirt deployment.
@@ -173,14 +62,17 @@ if dnf install -y filebeat; then
     # Write configuration to /etc/filebeat/filebeat.yml
     cat << EOF > /etc/filebeat/filebeat.yml
 filebeat.inputs:
-  # Collect the application logs of this instance from the mounted EFS directory.
-  # Only the instance's own directory is read: all instances see the complete
-  # shared EFS, so reading every directory would index each line multiple times.
+  # Container stdout/stderr is written to JSON files on the host.
   - type: filestream
-    id: cloudshirt-efs-logs
+    id: cloudshirt-docker-logs
     enabled: true
+    parsers:
+      - ndjson:
+          target: ""
+          message_key: log
+          overwrite_keys: true
     paths:
-      - /mnt/cloudshirt-logs/${INSTANCE_NAME}/app.log*
+      - /var/lib/docker/containers/*/*-json.log
 
   # Collect system logs
   - type: filestream
@@ -230,4 +122,4 @@ else
 
 fi
 
-echo "CloudShirt provisioning completed successfully."
+echo "CloudShirt worker provisioning completed successfully."

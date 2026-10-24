@@ -1,4 +1,5 @@
- -euo pipefail
+#!/bin/bash
+set -euo pipefail
 
 export HOME=/root
 LOG_FILE=/var/log/nightly-build.log
@@ -24,14 +25,27 @@ git config --global --add safe.directory "$REPO_DIR"
 cd "$REPO_DIR"
 git pull --ff-only
 
-# ECR login 
-aws ecr get-login-password --region "$REGION" \
-  | docker login --username AWS --password-stdin "$REGISTRY"
+# ECR auth comes from the ecr-login credential helper; docker login cannot store through it.
+
+# Compose needs SA_PASSWORD to parse the local SQL service; the cloud build uses RDS.
+export SA_PASSWORD="${SA_PASSWORD:-CloudShirtComposeOnly123!}"
 
 docker compose build
 
-# Tag and push every image defined in docker-compose.yml.
+# Push only images built by this repository, not pulled base images.
 for IMAGE in $(docker compose config --images); do
+  case "$IMAGE" in
+    */*)
+      echo "Skipping $IMAGE (external registry image)"
+      continue
+      ;;
+  esac
+
+  if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    echo "Skipping $IMAGE (not built locally)"
+    continue
+  fi
+
   NAME="$(basename "$IMAGE")"   # strip any registry/path prefix
   NAME="${NAME%%:*}"            # strip any tag
   TARGET="$REGISTRY/$NAME"

@@ -16,8 +16,12 @@ export AWS_PAGER=""
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 TEMPLATE_FILE="${ROOT_DIR}/templates/main.yaml"
-PACKAGED_TEMPLATE="${ROOT_DIR}/packaged-main.yaml"
+# Keep the packaged template out of the repository.
+PACKAGED_TEMPLATE="$(mktemp "${TMPDIR:-/tmp}/cloudshirt-packaged-main.XXXXXX")"
 USERDATA_FILE="${ROOT_DIR}/scripts/userdata.sh"
+
+cleanup() { rm -f "$PACKAGED_TEMPLATE"; }
+trap cleanup EXIT
 
 
 # Defaults (override with CLI flags or environment variables) --------------
@@ -34,6 +38,9 @@ DB_PASSWORD="${DB_PASSWORD:-ChangeMe123!}"
 BUILDSERVER_INSTANCE_PROFILE="${BUILDSERVER_INSTANCE_PROFILE:-LabInstanceProfile}"
 # Same Academy constraint for the web servers; empty creates the worker role.
 WEBSERVER_INSTANCE_PROFILE="${WEBSERVER_INSTANCE_PROFILE:-LabInstanceProfile}"
+# Academy provides LabRole and blocks custom roles; empty lets the stack create one.
+SERVERLESS_ROLE_ARN="${SERVERLESS_ROLE_ARN:-}"
+SERVERLESS_ROLE_ARN_SET="false"
 
 # Shared repository.
 # Can also be overridden using an environment variable.
@@ -74,6 +81,9 @@ Options:
                            Instance profile for the web servers (default:
                            LabInstanceProfile). Pass "" to create the
                            least-privilege CloudShirtWebServerRole instead.
+  --serverless-role-arn ARN
+                           Lambda execution role (default: LabRole when it
+                           exists). Pass "" to create a least-privilege role.
   -d, --delete             Delete the stack and all of its resources.
   -y, --yes                Do not ask for confirmation.
   -h, --help               Show this help and exit.
@@ -106,6 +116,9 @@ while [[ $# -gt 0 ]]; do
     -w|--webserver-instance-profile)
       [[ $# -ge 2 ]] || { error "Option $1 requires a value"; exit 1; }
       WEBSERVER_INSTANCE_PROFILE="$2"; shift 2 ;;
+    --serverless-role-arn)
+      [[ $# -ge 2 ]] || { error "Option $1 requires a value"; exit 1; }
+      SERVERLESS_ROLE_ARN="$2"; SERVERLESS_ROLE_ARN_SET="true"; shift 2 ;;
     -d|--delete)      DELETE_MODE="true"; shift ;;
     -y|--yes)         ASSUME_YES="true";  shift ;;
     -h|--help)        usage; exit 0 ;;
@@ -133,6 +146,12 @@ if ! ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text 2>/
   error "AWS credentials are missing or expired."
   error "Run 'aws configure' or refresh your AWS Academy lab credentials, then try again."
   exit 1
+fi
+
+# Use LabRole for the Lambda unless a role was passed explicitly.
+if [[ -z "$SERVERLESS_ROLE_ARN" && "$SERVERLESS_ROLE_ARN_SET" != "true" ]]; then
+  SERVERLESS_ROLE_ARN="$(aws iam get-role --role-name LabRole \
+    --query Role.Arn --output text 2>/dev/null || true)"
 fi
 
 if [[ -z "$STAGING_BUCKET" ]]; then
@@ -218,6 +237,7 @@ info "Region  : $REGION"
 info "Stack   : $STACK_NAME"
 info "Bucket  : s3://$STAGING_BUCKET"
 info "UserData: $USERDATA_SCRIPT_URL"
+info "Lambda  : ${SERVERLESS_ROLE_ARN:-<role created by the stack>}"
 echo
 
 # Ensure staging bucket exists
@@ -254,7 +274,8 @@ aws cloudformation deploy \
       "DBPassword=${DB_PASSWORD}" \
       "UserDataScriptUrl=${USERDATA_SCRIPT_URL}" \
       "BuildserverInstanceProfile=${BUILDSERVER_INSTANCE_PROFILE}" \
-      "WebServerInstanceProfile=${WEBSERVER_INSTANCE_PROFILE}"
+      "WebServerInstanceProfile=${WEBSERVER_INSTANCE_PROFILE}" \
+      "ServerlessRoleArn=${SERVERLESS_ROLE_ARN}"
 
 # Report root stack outputs
 echo
