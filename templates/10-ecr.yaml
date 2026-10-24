@@ -47,6 +47,40 @@ Resources:
         - Key: Name
           Value: CloudShirtRepository
 
+  # The Compose file also builds the public API image.
+  CloudShirtApiRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: cloudshirt-api
+
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep the last ${ImageRetentionCount} images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": ${ImageRetentionCount}
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+      EmptyOnDelete: true
+
+      Tags:
+        - Key: Name
+          Value: CloudShirtApiRepository
+
 Outputs:
 
   RepositoryName:
@@ -60,3 +94,7 @@ Outputs:
   RepositoryArn:
     Description: ARN of the CloudShirt ECR repository
     Value: !GetAtt CloudShirtRepository.Arn
+
+  ApiRepositoryUri:
+    Description: URI used to tag and push the CloudShirt public API images
+    Value: !GetAtt CloudShirtApiRepository.RepositoryUri

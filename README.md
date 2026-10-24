@@ -42,6 +42,14 @@ aws cloudformation deploy \
       DBPassword="ChangeMe123!"
 ```
 
+`provision.sh` automatically passes the pre-created `LabRole` ARN to the order insights Lambda, because AWS Academy Learner Lab blocks creating IAM roles. For a manual deploy in that environment, add:
+
+```bash
+ServerlessRoleArn="$(aws iam get-role --role-name LabRole --query Role.Arn --output text)"
+```
+
+In an account that allows custom roles, omit it and the serverless stack creates a least-privilege role scoped to the export prefix.
+
 ## 4. One-command deploy (provision script)
 
 The manual steps above are automated in `scripts/provision.sh` (Bash) and `scripts/provision.ps1` (Windows PowerShell):
@@ -208,7 +216,7 @@ The manager also pins the Swarm address pool to `10.100.0.0/16` (`--default-addr
 
 ### Swarm workers
 
-The ASG launch template (`templates/05-application.yaml`) installs Docker and the AWS CLI on every web server and joins it to the cluster as a worker. It reads the two parameters above from SSM and retries for up to 10 minutes (60 attempts, 10 seconds apart), because CloudFormation treats the Buildserver stack as complete before its UserData has published them. The worker security group also allows 7946 and 4789 between the workers themselves, because Swarm gossip and overlay traffic is peer-to-peer.
+The ASG launch template (`templates/05-application.yaml`) installs Docker and the AWS CLI on every web server and joins it to the cluster as a worker. It reads the two parameters above from SSM and retries for up to 10 minutes (60 attempts, 10 seconds apart), because CloudFormation treats the Buildserver stack as complete before its UserData has published them. The worker security group also allows 7946 and 4789 between the workers themselves, because Swarm gossip and overlay traffic is peer-to-peer. The launch template still downloads `userdata.sh` for the EFS mount, but the application itself now runs as a Swarm service (section 9); the legacy host systemd unit is disabled so it cannot hold port 80. Filebeat is opt-in (`ENABLE_FILEBEAT=true`): installing it on the 1 GB `t3.micro` workers exhausts memory and wedges the node, so the default worker setup skips it.
 
 `WebServerInstanceProfile` is the worker counterpart of `BuildserverInstanceProfile`. It defaults to `LabInstanceProfile`; pass an empty value to create `CloudShirtWebServerRole` with `AmazonEC2ContainerRegistryReadOnly` and an inline `ssm:GetParameter` policy scoped to the two Swarm parameters:
 
@@ -218,8 +226,37 @@ Replacing the Buildserver creates a new swarm and invalidates the previous join 
 
 ## 8. ECR registry
 
-`templates/10-ecr.yaml` creates the private repository `cloudshirt` with scan-on-push and a lifecycle policy that keeps the last `ImageRetentionCount` images (default 10). The root stack outputs `EcrRepositoryUri` (for example `<account-id>.dkr.ecr.<region>.amazonaws.com/cloudshirt`) and `EcrRepositoryName`:
+`templates/10-ecr.yaml` creates the private repositories `cloudshirt` and `cloudshirt-api` with scan-on-push and a lifecycle policy that keeps the last `ImageRetentionCount` images (default 10). The root stack outputs `EcrRepositoryUri` (for example `<account-id>.dkr.ecr.<region>.amazonaws.com/cloudshirt`), `EcrApiRepositoryUri` and `EcrRepositoryName`.
 
-The Buildserver is already authenticated to ECR through the credential helper, so only the tag and push steps remain. Run this on the Buildserver; the AWS CLI reads the region from the `~/.aws/config` written by its UserData:
+The Buildserver is already authenticated to ECR through the credential helper, so only the build and push steps remain. Run this on the Buildserver, or wait for the nightly cron entry:
 
-The image is tagged with the build date and `latest`, matching what the nightly build will push.
+```bash
+sudo /opt/build.sh
+tail -f /var/log/nightly-build.log
+```
+
+The script pulls the fork, runs `docker compose build`, tags every locally built image with the build date and `latest`, and pushes both tags to ECR. Images that Compose pulls from another registry (for example the SQL Server container used for local development) are skipped.
+
+## 9. Deploy the application on the cluster
+
+`scripts/deploy.sh` creates the Swarm service the first time and updates its image on later runs. The Buildserver downloads it to `/opt/deploy.sh`; run it on the manager after a successful build:
+
+
+```bash
+ALB_DNS="$(aws cloudformation describe-stacks \
+  --stack-name CloudShirtInfrastructure \
+  --region $AWS_REGION \
+  --query "Stacks[0].Outputs[?OutputKey=='LoadBalancerDNS'].OutputValue" \
+  --output text)"
+echo "http://$ALB_DNS/"
+```
+
+Verify the deployment:
+
+```bash
+sudo docker service ls
+sudo docker service ps cloudshirt
+aws elbv2 describe-target-health --target-group-arn "$(aws cloudformation describe-stacks \
+  --stack-name CloudShirtInfrastructure \
+  --query "Stacks[0].Outputs[?OutputKey=='TargetGroupArn'].OutputValue" --output text)"
+```

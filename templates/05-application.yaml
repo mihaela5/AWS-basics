@@ -130,7 +130,7 @@ Resources:
 
       LaunchTemplateData:
         ImageId: !Sub "{{resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64}}"
-        InstanceType: t3.micro
+        InstanceType: t3.small
         KeyName: !Ref KeyName
         
         IamInstanceProfile:
@@ -190,10 +190,13 @@ Resources:
 
             docker info --format 'Swarm state: {{.Swarm.LocalNodeState}}'
 
-            # Application
+            # Host setup only; the app runs as a Swarm service.
             curl -fsSL "${UserDataScriptUrl}" -o /tmp/userdata.sh
             chmod +x /tmp/userdata.sh
             /tmp/userdata.sh
+
+            # The old host app would hold port 80; disable it if present.
+            systemctl disable --now cloudshirt 2>/dev/null || true
 
         TagSpecifications:
           - ResourceType: instance

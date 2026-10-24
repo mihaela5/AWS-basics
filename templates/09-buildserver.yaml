@@ -52,6 +52,16 @@ Parameters:
       the default there. Leave this empty to create a least-privilege role
       and instance profile with ECR push/pull and SSM Session Manager access.
 
+  ScriptRepository:
+    Type: String
+    Default: mihaela5/AWS-basics
+    Description: GitHub repository (owner/name) that holds scripts/build.sh and scripts/deploy.sh
+
+  ScriptBranch:
+    Type: String
+    Default: main
+    Description: Branch of ScriptRepository from which the deployment scripts are downloaded
+
 Conditions:
   CreateInstanceProfile: !Equals [!Ref InstanceProfileName, ""]
 
@@ -86,6 +96,14 @@ Resources:
                 Action:
                   - ssm:PutParameter
                 Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SwarmParameterPrefix}/*"
+        - PolicyName: CloudShirtBuildserverDeployment
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                Resource: "*"
       Tags:
         - Key: Name
           Value: CloudShirtBuildserverRole
@@ -168,10 +186,19 @@ Resources:
           fi
           chown -R ec2-user:ec2-user /opt/CloudShirt
 
-          # Nightly build: download build.sh from the AWS-basics repo and schedule it.
-          curl -fsSL "https://raw.githubusercontent.com/${ScriptRepository}/${ScriptBranch}/scripts/build.sh" \
-            -o /opt/build.sh
+          # Nightly build and deployment scripts from the AWS-basics repo.
+          SCRIPTS_URL="https://raw.githubusercontent.com/${ScriptRepository}/${ScriptBranch}/scripts"
+          curl -fsSL "$SCRIPTS_URL/build.sh" -o /opt/build.sh
           chmod +x /opt/build.sh
+
+          # deploy.sh is optional until the branch carries it.
+          if curl -fsSL "$SCRIPTS_URL/deploy.sh" -o /opt/deploy.sh; then
+            chmod +x /opt/deploy.sh
+          else
+            rm -f /opt/deploy.sh
+            echo "WARNING: deploy.sh could not be downloaded; deploy the application manually."
+          fi
+
           echo "${BuildSchedule} root /opt/build.sh" > /etc/cron.d/nightly-build
           chmod 644 /etc/cron.d/nightly-build
 

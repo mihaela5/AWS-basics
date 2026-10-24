@@ -26,6 +26,13 @@ Parameters:
       default. Pass an empty value to let the application stack create a
       least-privilege role with ECR pull and Swarm parameter read access.
 
+  ServerlessRoleArn:
+    Type: String
+    Default: ""
+    Description: >
+      Existing Lambda role ARN. provision.sh passes LabRole in AWS Academy;
+      empty lets the serverless stack create one.
+
   ImageRetentionCount:
     Type: Number
     Default: 10
@@ -40,8 +47,9 @@ Parameters:
     
   DBPassword:
     Type: String
-    Default: ChangeMe123!
     NoEcho: true
+    MinLength: 8
+    Description: RDS master password; supply it through provision.sh or --parameter-overrides
 
   UserDataScriptUrl:
     Type: String
@@ -151,6 +159,7 @@ Resources:
         OrderExportBucketName: !GetAtt StorageStack.Outputs.S3BucketName
         OrderExportBucketArn: !GetAtt StorageStack.Outputs.S3BucketArn
         DeploymentVersion: "1"
+        LambdaRoleArn: !Ref ServerlessRoleArn
 
   CloudwatchStack:
     Type: AWS::CloudFormation::Stack
@@ -196,6 +205,10 @@ Outputs:
     Description: "URI used to tag and push CloudShirt images"
     Value: !GetAtt EcrStack.Outputs.RepositoryUri
 
+  EcrApiRepositoryUri:
+    Description: "URI used to tag and push the CloudShirt public API images"
+    Value: !GetAtt EcrStack.Outputs.ApiRepositoryUri
+
   StorageStackOutput:
     Description: "Storage Stack ID"
     Value: !Ref StorageStack
@@ -204,9 +217,25 @@ Outputs:
     Description: "Database Stack ID"
     Value: !Ref DatabaseStack
 
+  DatabaseEndpoint:
+    Description: "RDS SQL Server endpoint used by the application"
+    Value: !GetAtt DatabaseStack.Outputs.DBEndpoint
+
+  DatabasePort:
+    Description: "RDS SQL Server port used by the application"
+    Value: !GetAtt DatabaseStack.Outputs.DBPort
+
   ApplicationStackOutput:
     Description: "Application Stack ID"
     Value: !Ref ApplicationStack
+
+  LoadBalancerDNS:
+    Description: "DNS name of the CloudShirt Application Load Balancer"
+    Value: !GetAtt ApplicationStack.Outputs.LoadBalancerDNS
+
+  TargetGroupArn:
+    Description: "ARN of the CloudShirt target group"
+    Value: !GetAtt ApplicationStack.Outputs.TargetGroupArn
 
   AutoScalingGroupName:
     Description: "Name of the CloudShirt Auto Scaling Group (for scaling and instance refresh)"
