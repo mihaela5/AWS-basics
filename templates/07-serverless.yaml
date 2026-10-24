@@ -18,6 +18,16 @@ Parameters:
       does not redeploy the API when only the Lambda code changes, so a new
       route would otherwise never go live.
 
+  LambdaRoleArn:
+    Type: String
+    Default: ""
+    Description: >
+      Existing Lambda role ARN. provision.sh passes LabRole in AWS Academy;
+      empty creates the least-privilege role.
+
+Conditions:
+  CreateLambdaRole: !Equals [!Ref LambdaRoleArn, ""]
+
 Resources:
 
   InsightsLogGroup:
@@ -29,6 +39,7 @@ Resources:
   # Read-only access to the exports, and nowhere else in the bucket.
   InsightsRole:
     Type: AWS::IAM::Role
+    Condition: CreateLambdaRole
     Properties:
       RoleName: CloudShirt-OrderInsightsRole
       AssumeRolePolicyDocument:
@@ -65,7 +76,7 @@ Resources:
       Description: Summarises CloudShirt order exports for staff
       Runtime: python3.12
       Handler: insights.handler
-      Role: !GetAtt InsightsRole.Arn
+      Role: !If [CreateLambdaRole, !GetAtt InsightsRole.Arn, !Ref LambdaRoleArn]
       # Relative path: `aws cloudformation package` zips this folder and
       # rewrites the property to an S3 location.
       Code: ../lambda/order_insights
