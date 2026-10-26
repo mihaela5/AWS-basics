@@ -1,2 +1,15 @@
 __pycache__/
 *.py[cod]
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+
+# CloudFormation packaging output
+packaged-main.yaml

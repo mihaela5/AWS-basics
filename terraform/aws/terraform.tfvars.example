@@ -1,0 +1,20 @@
+aws_region = "us-east-1"
+stack_name = "CloudShirtInfrastructure"
+
+# Leave empty to use cloudshirt-cfn-staging-<account-id>.
+staging_bucket_name = ""
+
+key_name    = "vockey"
+db_username = "cloudshirtadmin"
+
+# Do not put the database password in this file. Export it instead:
+#   export TF_VAR_db_password='...'
+# terraform plan/apply prompts for it when the variable is not set.
+
+userdata_script_url = "https://raw.githubusercontent.com/mihaela5/AWS-basics/main/scripts/userdata.sh"
+
+buildserver_instance_profile = "LabInstanceProfile"
+webserver_instance_profile   = "LabInstanceProfile"
+
+alarm_email           = ""
+image_retention_count = 10
