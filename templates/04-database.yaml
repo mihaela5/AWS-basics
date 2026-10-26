@@ -21,7 +21,7 @@ Parameters:
 
   DBPassword:
     Type: String
-    Default: ChangeMe123!
+    MinLength: 8
     Description: Master password for SQL Server administrator
     NoEcho: true
 
