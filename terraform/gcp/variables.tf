@@ -20,3 +20,22 @@ variable "gcp_bucket_name" {
     error_message = "Provide a valid Google Cloud Storage bucket name."
   }
 }
+
+
+variable "gke_cluster_name" {
+  description = "Name of the CloudShirt GKE cluster"
+  type        = string
+  default     = "cloudshirt-gke"
+}
+
+variable "gke_node_count" {
+  description = "Number of worker nodes in the GKE node pool"
+  type        = number
+  default     = 1
+}
+
+variable "gke_machine_type" {
+  description = "Compute Engine machine type for GKE workers"
+  type        = string
+  default     = "e2-medium"
+}
