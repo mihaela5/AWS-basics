@@ -166,6 +166,15 @@ kubectl get pods -o wide
 kubectl delete deployment capacity-test
 ```
 
+## Deploy the application
+
+The CloudShirt workload is described in
+[`kubernetes/README.md`](../../kubernetes/README.md). It uses the
+`artifact_registry_url` output for the image references and the
+`gke_get_credentials_command` output for the kubeconfig. `scripts/deploy-k8s.sh`
+reads the project, region, zone, cluster name and registry URL from this
+module's state when they are not passed as environment variables.
+
 ## Images and Artifact Registry
 
 The node service account already has `roles/artifactregistry.reader` on the

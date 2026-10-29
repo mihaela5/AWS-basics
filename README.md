@@ -260,3 +260,9 @@ aws elbv2 describe-target-health --target-group-arn "$(aws cloudformation descri
   --stack-name CloudShirtInfrastructure \
   --query "Stacks[0].Outputs[?OutputKey=='TargetGroupArn'].OutputValue" --output text)"
 ```
+
+## 10. Google Cloud and Kubernetes
+
+Assignment 3 adds a GCP half. `terraform/gcp` provisions the VPC, the private GKE cluster, its node pool, the Artifact Registry repository and a Cloud Storage bucket. `kubernetes/` contains the application manifests, and `scripts/deploy-k8s.sh` applies them and exposes the website through one external IP. See [terraform/gcp/README.md](terraform/gcp/README.md) and [kubernetes/README.md](kubernetes/README.md).
+
+The GCP Terraform state is separate from the AWS stack, so the two clouds can be created and destroyed independently.

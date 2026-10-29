@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudshirt-config
+  namespace: cloudshirt
+  labels:
+    app.kubernetes.io/part-of: cloudshirt
+data:
+  ASPNETCORE_ENVIRONMENT: "Docker"
+  ASPNETCORE_URLS: "http://+:8080"
+  ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+  UseOnlyInMemoryDatabase: "false"
+  BaseUrls__ApiBase: "http://cloudshirt-api:8080/api/"
+  BaseUrls__WebBase: "http://cloudshirt-web:8080/"
+  Logging__LogLevel__Default: "Information"
