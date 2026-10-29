@@ -1,3 +1,12 @@
 gcp_project_id  = "your-gcp-project-id"
 gcp_region      = "europe-west4"
+gcp_zone        = "europe-west4-a"
 gcp_bucket_name = "cloudshirt-your-unique-suffix-gcp"
+
+# 0.0.0.0/0 is convenient for a lab because the operator IP can change.
+# The cluster endpoint still requires Google IAM authentication, but restrict
+# this to known CIDR blocks in any non-lab deployment.
+admin_cidr_blocks = ["0.0.0.0/0"]
+
+gke_node_count   = 2
+gke_machine_type = "e2-standard-2"
