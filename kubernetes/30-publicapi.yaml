@@ -1,0 +1,113 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloudshirt-api
+  namespace: cloudshirt
+  labels:
+    app.kubernetes.io/name: cloudshirt-api
+    app.kubernetes.io/part-of: cloudshirt
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudshirt-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloudshirt-api
+        app.kubernetes.io/part-of: cloudshirt
+        app.kubernetes.io/component: api
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: cloudshirt-api
+      initContainers:
+        - name: wait-for-database
+          image: __API_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -c
+            - |
+              until (echo > /dev/tcp/cloudshirt-sql/1433) 2>/dev/null; do
+                echo "waiting for CloudShirt database"
+                sleep 5
+              done
+      containers:
+        - name: api
+          image: __API_IMAGE__
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: cloudshirt-config
+          env:
+            - name: ConnectionStrings__CatalogConnection
+              valueFrom:
+                secretKeyRef:
+                  name: cloudshirt-db
+                  key: CatalogConnection
+            - name: ConnectionStrings__IdentityConnection
+              valueFrom:
+                secretKeyRef:
+                  name: cloudshirt-db
+                  key: IdentityConnection
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          startupProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudshirt-api
+  namespace: cloudshirt
+  labels:
+    app.kubernetes.io/name: cloudshirt-api
+    app.kubernetes.io/part-of: cloudshirt
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: cloudshirt-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

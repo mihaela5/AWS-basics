@@ -1,109 +1,253 @@
 # Google Cloud Terraform
 
-This root module provisions Google Cloud resources for CloudShirt using Terraform. It is separate from the AWS Terraform root module in `terraform/aws`, which manages the existing CloudFormation-based AWS architecture.
+This root module provisions the Google Cloud half of the CloudShirt multi-cloud
+deployment: a dedicated VPC, a private zonal GKE cluster, a two-node worker pool,
+a dedicated node service account with image-pull permission on Artifact
+Registry, a Docker repository and a Cloud Storage bucket. It is separate from
+the AWS root module in `terraform/aws`, which keeps its own state.
 
-The GCP module configures the Google provider, creates a Cloud Storage bucket, and exposes deployment details through Terraform outputs. It does not modify or recreate the existing AWS infrastructure.
+## Architecture
+
+| Resource | Name | Purpose |
+| --- | --- | --- |
+| VPC | `cloudshirt-gcp-vpc` | Isolated network for the cluster |
+| Subnet | `cloudshirt-gke-subnet` (`10.128.0.0/20`) | Node IP range; Private Google Access enabled |
+| Pod secondary range | `cloudshirt-pods` (`10.129.0.0/16`) | Pod IP addresses |
+| Service secondary range | `cloudshirt-services` (`10.130.0.0/20`) | Service ClusterIP addresses |
+| Control-plane range | `172.16.0.0/28` | GKE private-cluster control-plane peering |
+| GKE cluster | `cloudshirt-gke` (zonal) | Private nodes, public control-plane endpoint |
+| Node pool | `cloudshirt-node-pool` | 2 × `e2-standard-2` workers by default |
+| Node service account | `cloudshirt-gke-nodes` | Logging, monitoring, Artifact Registry read |
+| Artifact Registry | `cloudshirt-images` (`europe-west4`) | Docker images for the application |
+| Cloud Storage | `cloudshirt-<project>-gcp` | Shared bucket for the GCP deployment |
+
+The GCP address plan (`10.128.0.0/20` for nodes, `10.129.0.0/16` for pods and
+`10.130.0.0/20` for services) does not overlap the AWS VPC's `10.0.0.0/16` in
+`templates/01-networking.yaml`, so the networks can be connected later without
+renumbering.
 
 ## Prerequisites
 
 - Terraform >= 1.5
-- A Google Cloud project with billing enabled
-- Google Cloud CLI (`gcloud`) installed
-- Google Cloud credentials configured using Application Default Credentials (ADC)
-- The Cloud Storage API enabled in the target project
-- Permissions to create, view, and manage Cloud Storage buckets in the target project
-- A globally unique Cloud Storage bucket name
+- Google Cloud CLI (`gcloud`) with the `gke-gcloud-auth-plugin` component
+- `kubectl`
+- Application Default Credentials (`gcloud auth application-default login`)
+- A project with billing enabled
+- Permissions to create networks, GKE clusters, service accounts and Artifact
+  Registry repositories (the project Owner role covers this)
+- The following APIs enabled: `compute.googleapis.com`,
+  `container.googleapis.com`, `artifactregistry.googleapis.com`,
+  `iam.googleapis.com` and `storage.googleapis.com`
+
+For a fresh project, enable the APIs once:
+
+```bash
+gcloud services enable \
+  compute.googleapis.com \
+  container.googleapis.com \
+  artifactregistry.googleapis.com \
+  iam.googleapis.com \
+  storage.googleapis.com \
+  --project YOUR_PROJECT_ID
+```
 
 ## Configuration
 
-Create a `terraform.tfvars` file in this directory with your project-specific values:
+Create `terraform.tfvars` from `terraform.tfvars.example`:
 
 ```hcl
-gcp_project_id  = "your-gcp-project-id"
-gcp_region      = "europe-west4"
-gcp_bucket_name = "cloudshirt-your-unique-suffix-gcp"
+gcp_project_id    = "pcc-2026"
+gcp_region        = "europe-west4"
+gcp_zone          = "europe-west4-a"
+gcp_bucket_name   = "cloudshirt-405019634597-gcp"
+admin_cidr_blocks = ["0.0.0.0/0"]
+
+gke_node_count   = 2
+gke_machine_type = "e2-standard-2"
 ```
 
-Replace the example values with your actual Google Cloud project ID and a globally unique bucket name.
+`terraform.tfvars` is ignored by Git. `gcp_bucket_name` is optional and defaults
+to `cloudshirt-<project-id>-gcp`.
 
-Do not commit `terraform.tfvars` if it contains private configuration. Commit `terraform.tfvars.example` with placeholder values instead.
+### Control-plane access
+
+`admin_cidr_blocks` controls who can reach the **public GKE control-plane
+endpoint**. The variable has no default so each environment chooses explicitly.
+The example and this repository's `terraform.tfvars` use `0.0.0.0/0` because the
+operator's public IP changes; access still requires valid Google IAM
+credentials. The worker nodes remain private. In a production deployment,
+replace it with the operator's `/32` (or the CI runner's address range).
 
 ## First run
 
-Authenticate with Google Cloud and select your project:
+Authenticate and select the project:
 
 ```bash
 gcloud auth application-default login
-gcloud config set project YOUR_GCP_PROJECT_ID
-gcloud services enable storage.googleapis.com
+gcloud config set project pcc-2026
 ```
 
-Initialize and validate the Terraform configuration:
+Initialise, validate and review:
 
 ```bash
 terraform init
-terraform fmt
+terraform fmt -recursive
 terraform validate
 terraform plan
-```
-
-Review the plan to confirm that Terraform will create only the intended Google Cloud resources.
-
-Apply the configuration:
-
-```bash
 terraform apply
 ```
 
-Terraform will ask for confirmation before creating the resources unless automatic approval is explicitly enabled.
+`terraform init` creates `.terraform.lock.hcl`; keep it under version control.
+Do not commit `terraform.tfvars` or any `*.tfstate` file.
 
 ## Outputs
 
-After a successful deployment, inspect the available outputs:
+| Output | Use |
+| --- | --- |
+| `artifact_registry_url` | Registry prefix for `docker tag` / `docker push` |
+| `gke_cluster_name`, `gke_cluster_location` | Cluster identity |
+| `gke_cluster_endpoint` | Public control-plane endpoint |
+| `gke_cluster_ca_certificate` | Cluster CA (marked sensitive) |
+| `gke_get_credentials_command` | Writes the kubeconfig used by `kubectl` and Ansible |
+| `gke_node_pool_name` | Node pool name |
+| `gke_node_service_account_email` | Node identity used for image pulls |
+| `gke_workload_identity_pool` | Pool for Kubernetes service accounts |
+
+Write the kubeconfig with:
 
 ```bash
-terraform output
+eval "$(terraform output -raw gke_get_credentials_command)"
 ```
 
-The module exposes:
+On Windows PowerShell:
 
-- `gcp_project_id` — Google Cloud project hosting the resources.
-- `gcp_region` — configured Google Cloud region.
-- `gcp_bucket_name` — name of the Cloud Storage bucket.
-- `gcp_bucket_url` — Cloud Storage URI in the format `gs://<bucket-name>`.
+```powershell
+Invoke-Expression (terraform output -raw gke_get_credentials_command)
+```
 
-You can retrieve the bucket URI directly:
+## Verify the cluster
 
 ```bash
-terraform output -raw gcp_bucket_url
+kubectl cluster-info
+kubectl get nodes -o wide
+kubectl get pods -A
 ```
 
-## Verification
+Expected: one control-plane endpoint, two nodes in `Ready` state with only
+internal IP addresses, and all `kube-system` pods running.
 
-Check that the bucket exists in Google Cloud:
+Check the private-node configuration:
 
 ```bash
-gcloud storage buckets describe gs://BUCKET_NAME
+gcloud container clusters describe cloudshirt-gke \
+  --zone europe-west4-a \
+  --format="value(privateClusterConfig.enablePrivateNodes)"
 ```
 
-Alternatively, use the bucket name returned by Terraform:
+Test image pulls through Private Google Access. The sample image lives in a
+public Google Artifact Registry repository, so it works without Cloud NAT:
 
 ```bash
-gcloud storage buckets describe "gs://$(terraform output -raw gcp_bucket_name)"
+kubectl run image-pull-test \
+  --image=us-docker.pkg.dev/google-samples/containers/gke/hello-app:1.0 \
+  --restart=Never
+kubectl get pod image-pull-test
+kubectl delete pod image-pull-test
 ```
+
+Test that the node pool can host five replicas:
+
+```bash
+kubectl create deployment capacity-test \
+  --image=us-docker.pkg.dev/google-samples/containers/gke/hello-app:1.0 \
+  --replicas=5
+kubectl rollout status deployment/capacity-test
+kubectl get pods -o wide
+kubectl delete deployment capacity-test
+```
+
+## Deploy the application
+
+The CloudShirt workload is described in
+[`kubernetes/README.md`](../../kubernetes/README.md). It uses the
+`artifact_registry_url` output for the image references and the
+`gke_get_credentials_command` output for the kubeconfig. `scripts/deploy-k8s.sh`
+reads the project, region, zone, cluster name and registry URL from this
+module's state when they are not passed as environment variables.
+
+## Images and Artifact Registry
+
+The node service account already has `roles/artifactregistry.reader` on the
+`cloudshirt-images` repository. Push application images with the authenticated
+Docker helper:
+
+```bash
+gcloud auth configure-docker europe-west4-docker.pkg.dev
+
+docker tag cloudshirt/web:local \
+  europe-west4-docker.pkg.dev/pcc-2026/cloudshirt-images/cloudshirt:latest
+docker push \
+  europe-west4-docker.pkg.dev/pcc-2026/cloudshirt-images/cloudshirt:latest
+```
+
+Private nodes have no general internet egress and no Cloud NAT. They can pull
+from Google-hosted registries through Private Google Access, but an image from
+Docker Hub, MCR (`mcr.microsoft.com`) or another registry must be mirrored into
+Artifact Registry first. For the SQL Server image used by the Kubernetes
+deployment:
+
+```bash
+docker pull mcr.microsoft.com/mssql/server:2022-latest
+docker tag mcr.microsoft.com/mssql/server:2022-latest \
+  europe-west4-docker.pkg.dev/pcc-2026/cloudshirt-images/sqlserver:2022-latest
+docker push \
+  europe-west4-docker.pkg.dev/pcc-2026/cloudshirt-images/sqlserver:2022-latest
+```
+
+If a non-Google registry is needed directly, add Cloud NAT to the VPC instead.
+
+## Security notes
+
+- Worker nodes are private; the control plane has a public endpoint restricted
+  by `admin_cidr_blocks`, and client certificates are disabled.
+- The `0.0.0.0/0` value in the example and local `terraform.tfvars` is a lab
+  trade-off, not a production setting.
+- The node identity is a dedicated service account with a repository-scoped
+  Artifact Registry read role rather than the default compute account.
+- The cluster uses Workload Identity; Kubernetes service accounts can be bound
+  to Google service accounts in the deployment issue.
+- Database credentials, Kubernetes Secrets and application configuration are
+  not managed by this module; they belong to the Kubernetes deployment and
+  Ansible issues.
 
 ## State and cleanup
 
-- Terraform state is managed independently from the AWS Terraform state because this module is in a separate directory.
-- Do not commit `.terraform/` or local state files such as `terraform.tfstate`. Keep `.terraform.lock.hcl` under version control.
-- The bucket is configured with `force_destroy = false`, so Terraform will not automatically empty a non-empty bucket to delete it.
-- To destroy the GCP resources managed by this module, run `terraform destroy` from this directory after reviewing the plan.
-- Remove any objects stored in the bucket before attempting to destroy it if it is no longer needed.
-- Do not run `terraform destroy` from `terraform/aws` when your intention is to remove only the GCP resources.
+Terraform state is local at `terraform/gcp/terraform.tfstate` and ignored by
+Git. Back it up after an apply if the cluster is still needed:
 
-## Notes
+```powershell
+terraform state pull > "$env:USERPROFILE\cloudshirt-gcp-state-backup.json"
+```
 
-- This module provisions Google Cloud resources independently of the AWS deployment. Applying it does not deploy CloudShirt's application to Google Cloud.
-- The GCP project ID, region, and bucket name are configurable through Terraform variables.
-- Google Cloud credentials are supplied through Application Default Credentials; service-account keys should not be committed to the repository.
-- Keep the AWS and GCP Terraform state files separate unless you deliberately introduce a shared orchestration and state-management design.
+Use a GCS backend instead if more than one operator applies to the project.
+
+Destroy the GCP resources from this directory:
+
+```bash
+terraform destroy
+```
+
+The cluster and node pool are deleted first. The Artifact Registry repository
+and its images are deleted as well, so capture evidence before destroying. The
+storage bucket has `force_destroy = false`; empty it first if destroy fails.
+Check for orphaned persistent disks and forwarding rules left by the
+Kubernetes deployment:
+
+```bash
+gcloud compute disks list --project pcc-2026 --filter="name~cloudshirt"
+gcloud compute addresses list --project pcc-2026
+```
+
+The AWS module and this module have separate state and separate lifecycles. Do
+not run `terraform destroy` in `terraform/aws` when the intention is to remove
+only the GCP resources.

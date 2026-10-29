@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloudshirt-sql
+  namespace: cloudshirt
+  labels:
+    app.kubernetes.io/name: cloudshirt-sql
+    app.kubernetes.io/part-of: cloudshirt
+spec:
+  selector:
+    app.kubernetes.io/name: cloudshirt-sql
+  ports:
+    - name: sql
+      port: 1433
+      targetPort: sql
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: cloudshirt-sql
+  namespace: cloudshirt
+  labels:
+    app.kubernetes.io/name: cloudshirt-sql
+    app.kubernetes.io/part-of: cloudshirt
+spec:
+  serviceName: cloudshirt-sql
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudshirt-sql
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cloudshirt-sql
+        app.kubernetes.io/part-of: cloudshirt
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+      containers:
+        - name: sqlserver
+          image: __SQL_IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: sql
+              containerPort: 1433
+          env:
+            - name: ACCEPT_EULA
+              value: "Y"
+            - name: MSSQL_SA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: cloudshirt-db
+                  key: SA_PASSWORD
+          resources:
+            requests:
+              cpu: 500m
+              memory: 2Gi
+            limits:
+              cpu: "1"
+              memory: 3Gi
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - 'SQLCMDPASSWORD="$MSSQL_SA_PASSWORD" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -Q "SELECT 1" -b -o /dev/null'
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - -c
+                - 'SQLCMDPASSWORD="$MSSQL_SA_PASSWORD" /opt/mssql-tools18/bin/sqlcmd -C -S localhost -U sa -Q "SELECT 1" -b -o /dev/null'
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: data
+              mountPath: /var/opt/mssql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: cloudshirt-sql
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 8Gi
