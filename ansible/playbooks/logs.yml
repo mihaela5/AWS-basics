@@ -1,0 +1,8 @@
+---
+- name: Collect the CloudShirt application logs
+  hosts: gke
+  gather_facts: false
+  roles:
+    - prerequisites
+    - gke_access
+    - logs

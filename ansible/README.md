@@ -20,27 +20,12 @@ verify the node pool instead of reconfiguring it.
 | `inventory/group_vars/all.yml` | Cluster, namespace and image settings |
 | `playbooks/site.yml` | Full run: prerequisites, access, deployment and verification |
 | `playbooks/verify.yml` | Read-only check of an existing deployment |
+| `playbooks/logs.yml` | Collect the application logs of the running deployment |
 | `roles/prerequisites` | gcloud tooling, authentication, project, Python client and collection |
 | `roles/gke_access` | Kubeconfig, API readiness and node readiness |
 | `roles/cloudshirt` | Namespace, configuration, secret, SQL Server, API and website |
 | `roles/verify` | Replica, pod, external IP and HTTP checks |
-
-## Issue 50 checklist
-
-| Task | Implementation |
-| --- | --- |
-| Ansible project with an inventory and reusable playbooks or roles | `inventory/hosts.yml`, `playbooks/` and `roles/` |
-| Configuration tasks required by the cluster architecture | `roles/gke_access` and `roles/cloudshirt` |
-| Applicable node prerequisites and configuration | GKE manages the nodes; `roles/gke_access` waits for the node pool and for every node to be Ready |
-| Required access, dependencies and deployment tooling | `roles/prerequisites` |
-| Application deployment or related Kubernetes configuration | `roles/cloudshirt` applies the manifests from `kubernetes/` |
-| Repeatable and safe to rerun | The `kubernetes.core.k8s` module compares live objects with the manifests, and the database secret is created once and checked on later runs |
-| Test the playbooks against the intended environment | `playbooks/site.yml` ends with the checks in `roles/verify`; `playbooks/verify.yml` reruns them |
-| Document execution requirements and commands | This page |
-
-REQ-21 is covered by these roles. REQ-22 (log collection, issue 51) adds a
-separate playbook to this project; the `gke_access` role is independent of the
-deployment roles so it can be reused there.
+| `roles/logs` | Pod discovery, container log collection and the run summary |
 
 ## Rollout order
 
@@ -164,6 +149,8 @@ The play applies the following in order:
 | `cloudshirt_rollout_retries`, `cloudshirt_rollout_delay` | `60`, `10` | Rollout polling, 10 minutes in total |
 | `verify_lb_retries`, `verify_lb_delay` | `60`, `10` | External IP polling |
 | `verify_http` | `true` | Set to `false` when the control host cannot reach the external IP |
+| `logs_output_dir` | `<repository>/logs` | Destination for the timestamped log directories |
+| `logs_since` | `24h` | Window passed to `kubectl logs --since` |
 
 Override any value with `-e`, for example:
 
@@ -180,7 +167,8 @@ ansible-playbook playbooks/site.yml -e gcp_zone=europe-west4-b -e cloudshirt_ima
   and fails instead of overwriting the password the SQL volume was initialised
   with.
 - The kubeconfig refresh, rollout waits and verification tasks only read the
-  cluster and report no changes.
+  cluster and report no changes. Every `logs` run writes a new timestamped
+  directory and leaves the cluster untouched.
 - The web and API images are built by `terraform apply` through
   `scripts/build-and-push.sh`. To rebuild from the current `main` without other
   changes, run
@@ -212,6 +200,33 @@ ok: [control] => {
 ```
 
 The same values are available with `kubectl`:
+
+## Collect logs
+
+The logs playbook reuses `prerequisites` and `gke_access`, then reads the
+output of every container of every pod in the `cloudshirt` namespace:
+
+```bash
+ansible-playbook playbooks/logs.yml
+```
+
+The run writes a timestamped directory:
+
+```text
+logs/20261030T223000Z/
+├── cloudshirt-api-6f9c4b8d7-x2vqn_api.log
+├── cloudshirt-sql-0_sqlserver.log
+├── cloudshirt-web-7d4b6c9f5-9kz4m_web.log
+├── ...
+└── summary.txt
+```
+
+Each line starts with the timestamp recorded by the container runtime, for
+example `2026-10-30T22:31:04.123456789Z`. `summary.txt` adds the collection
+time, project, zone, cluster, namespace, `--since` window, pods and nodes, and
+the result of each `kubectl logs` call. The files are working copies, not
+sources, so `logs/` is in `.gitignore`.
+```
 
 ## Cleanup
 

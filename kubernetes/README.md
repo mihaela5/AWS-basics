@@ -24,6 +24,7 @@ persistent volume. Run the commands on this page from the repository root.
 | REQ-19 | `terraform/gcp/cluster.tf` provisions the GKE cluster and its node pool. |
 | REQ-20 | `cloudshirt-web` runs five replicas on the node pool managed by the GKE control plane. |
 | REQ-21 | [`ansible/`](../ansible/README.md) prepares the control host, writes the kubeconfig and applies these manifests with the `kubernetes.core` roles. |
+| REQ-22 | [`ansible/playbooks/logs.yml`](../ansible/README.md#collect-logs) collects the container logs of the running application with Ansible. |
 
 ## Prerequisites
 
