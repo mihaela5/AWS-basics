@@ -25,7 +25,13 @@
     that:
       - cloudshirt_sa_password | length >= 8
       - "';' not in cloudshirt_sa_password"
-    fail_msg: "Set SA_PASSWORD with at least 8 characters and no ';'."
+      - >-
+        [cloudshirt_sa_password | regex_search('[A-Z]') is not none,
+         cloudshirt_sa_password | regex_search('[a-z]') is not none,
+         cloudshirt_sa_password | regex_search('[0-9]') is not none,
+         cloudshirt_sa_password | regex_search('[^A-Za-z0-9]') is not none]
+        | select | list | length >= 3
+    fail_msg: "Set SA_PASSWORD with at least 8 characters, 3 of upper/lower/digit/symbol, and no ';'."
   when: cloudshirt_db_secret.resources | length == 0
 
 - name: Check the existing database password

@@ -47,19 +47,26 @@ deployment roles so it can be reused there.
 Terraform and Ansible are separate stages:
 
 1. `terraform -chdir=terraform/gcp apply` creates the VPC, cluster, node pool,
-   Artifact Registry repository and bucket. The cluster starts with only the GKE
-   system pods; no CloudShirt workload exists yet.
-2. Build and push the web, API and SQL Server images to Artifact Registry. The
-   private nodes cannot pull from Docker Hub or MCR.
+   Artifact Registry repository and bucket. It also runs
+   `scripts/build-and-push.sh` through the
+   `terraform_data.build_cloudshirt_images` resource, which builds and pushes the
+   web and API images with the commit tag and `latest`. This needs `bash`,
+   `git`, Docker with buildx and an authenticated `gcloud` on the machine that
+   runs Terraform. The cluster starts with only the GKE system pods; no
+   CloudShirt workload exists yet.
+2. Mirror the SQL Server image into Artifact Registry; skip this when it is
+   already there. The build script does not handle it; the command is in
+   `terraform/gcp/README.md`. The private nodes cannot pull from Docker Hub or
+   MCR.
 3. `ansible-playbook playbooks/site.yml` writes the kubeconfig, applies the
    manifests and waits until the website answers on its external IP.
 
-Terraform does not invoke Ansible. Keeping the stages separate means
-`terraform apply` only manages infrastructure, the kubeconfig is written by
-Ansible rather than Terraform, and the application can be redeployed without
-recreating the cluster. A wrapper script or CI job can call all three steps in
-order. A Terraform `local-exec` provisioner is not used: it would run Ansible on
-whichever machine applies Terraform and still would not build the images.
+Terraform does not invoke Ansible. It uses a `local-exec` only for the image
+build; the cluster configuration and application deployment remain a separate
+Ansible stage. That keeps `terraform apply` focused on infrastructure, writes
+the kubeconfig from Ansible rather than Terraform, and lets the application be
+redeployed without recreating the cluster. A wrapper script or CI job can call
+all three steps in order.
 
 ## Prerequisites
 
@@ -69,9 +76,11 @@ whichever machine applies Terraform and still would not build the images.
   install `python3-venv` and `pip` (on Ubuntu, `sudo apt install python3-venv`).
 - The GCP resources in [`terraform/gcp`](../terraform/gcp/README.md) applied:
   the cluster, the node pool and the `cloudshirt-images` repository.
-- The application, API and SQL Server images pushed to Artifact Registry. The
-  nodes are private and have no Cloud NAT, so images from Docker Hub or MCR
-  cannot be pulled.
+- The web and API images are built and pushed by `terraform apply` through
+  `scripts/build-and-push.sh`; if the cluster already exists, ensure those images
+  are in Artifact Registry. The SQL Server image is not built by that script;
+  mirror it into Artifact Registry first. The nodes are private and have no
+  Cloud NAT, so images from Docker Hub or MCR cannot be pulled.
 - `gcloud` installed and authenticated with `gcloud auth login`. The project is
   read from `gcp_project_id`, the `GCP_PROJECT_ID` environment variable, or the
   active `gcloud` configuration, in that order.
@@ -114,7 +123,7 @@ run the playbooks with `ANSIBLE_CONFIG="$PWD/ansible.cfg" ansible-playbook ...`.
 ## Configure and deploy
 
 ```bash
-export GCP_PROJECT_ID=pcc-2026   # optional when gcloud already selects it
+export GCP_PROJECT_ID=cloud-orchestration-512823   # optional when gcloud already selects it
 export SA_PASSWORD='...'         # required only when cloudshirt-db does not exist
 ansible-playbook playbooks/site.yml
 ```
@@ -149,9 +158,9 @@ The play applies the following in order:
 | `gke_cluster_name` | `cloudshirt-gke` | Cluster name |
 | `gke_min_ready_nodes` | `2` | Minimum node count before the deployment starts |
 | `cloudshirt_namespace` | `cloudshirt` | Namespace for all application objects |
-| `cloudshirt_image_tag` | `latest` (`IMAGE_TAG`) | Tag applied to the web and API images |
+| `cloudshirt_image_tag` | `latest` (`IMAGE_TAG`) | Tag applied to the web and API images; use the commit tag printed by `build-and-push.sh` for reproducible rollouts |
 | `cloudshirt_registry` | `<region>-docker.pkg.dev/<project>/cloudshirt-images` (`ARTIFACT_REGISTRY`) | Registry prefix for all image references |
-| `cloudshirt_sa_password` | `SA_PASSWORD` | SQL Server SA password |
+| `cloudshirt_sa_password` | `SA_PASSWORD` | SQL Server SA password (8+ characters, 3 of upper/lower/digit/symbol) |
 | `cloudshirt_rollout_retries`, `cloudshirt_rollout_delay` | `60`, `10` | Rollout polling, 10 minutes in total |
 | `verify_lb_retries`, `verify_lb_delay` | `60`, `10` | External IP polling |
 | `verify_http` | `true` | Set to `false` when the control host cannot reach the external IP |
@@ -159,7 +168,7 @@ The play applies the following in order:
 Override any value with `-e`, for example:
 
 ```bash
-ansible-playbook playbooks/site.yml -e gcp_zone=europe-west4-b -e cloudshirt_image_tag=20261030
+ansible-playbook playbooks/site.yml -e gcp_zone=europe-west4-b -e cloudshirt_image_tag=abc1234
 ```
 
 ## Repeat runs
@@ -172,8 +181,13 @@ ansible-playbook playbooks/site.yml -e gcp_zone=europe-west4-b -e cloudshirt_ima
   with.
 - The kubeconfig refresh, rollout waits and verification tasks only read the
   cluster and report no changes.
-- Rebuilding or pushing images is outside these playbooks; change
-  `cloudshirt_image_tag` to roll out a newer build.
+- The web and API images are built by `terraform apply` through
+  `scripts/build-and-push.sh`. To rebuild from the current `main` without other
+  changes, run
+  `terraform -chdir=terraform/gcp apply -replace=terraform_data.build_cloudshirt_images`.
+- The manifests use `imagePullPolicy: IfNotPresent`. A rebuilt `latest` image is
+  not pulled on a node that already has that tag; pass the commit tag printed by
+  the script (`-e cloudshirt_image_tag=<tag>`) to roll out a new build.
 
 ## Verify
 

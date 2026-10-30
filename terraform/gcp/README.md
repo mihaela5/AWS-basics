@@ -31,6 +31,8 @@ renumbering.
 - Terraform >= 1.5
 - Google Cloud CLI (`gcloud`) with the `gke-gcloud-auth-plugin` component
 - `kubectl`
+- Docker with `buildx`, `git` and `bash` (Git Bash on Windows) for the image
+  build that runs during `terraform apply`
 - Application Default Credentials (`gcloud auth application-default login`)
 - A project with billing enabled
 - Permissions to create networks, GKE clusters, service accounts and Artifact
@@ -56,7 +58,7 @@ gcloud services enable \
 Create `terraform.tfvars` from `terraform.tfvars.example`:
 
 ```hcl
-gcp_project_id    = "pcc-2026"
+gcp_project_id    = "cloud-orchestration-512823"
 gcp_region        = "europe-west4"
 gcp_zone          = "europe-west4-a"
 gcp_bucket_name   = "cloudshirt-405019634597-gcp"
@@ -84,7 +86,7 @@ Authenticate and select the project:
 
 ```bash
 gcloud auth application-default login
-gcloud config set project pcc-2026
+gcloud config set project cloud-orchestration-512823
 ```
 
 Initialise, validate and review:
@@ -178,36 +180,52 @@ module's state when they are not passed as environment variables.
 [`ansible/`](../../ansible/README.md) performs the same rollout through Ansible:
 `ansible-playbook ansible/playbooks/site.yml` prepares the control host, writes
 the kubeconfig and applies the manifests. It is a separate step after
-`terraform apply` and after the images are pushed; this module does not invoke
-it.
+`terraform apply`; this module builds the web and API images during apply, but
+does not invoke Ansible.
 
 ## Images and Artifact Registry
 
 The node service account already has `roles/artifactregistry.reader` on the
-`cloudshirt-images` repository. Push application images with the authenticated
-Docker helper:
+`cloudshirt-images` repository. `terraform apply` builds and pushes the web and
+API images with `scripts/build-and-push.sh`, through the
+`terraform_data.build_cloudshirt_images` resource. The script clones
+`cloudshirt_repo_url`, checks out `main`, builds both Dockerfiles for
+`linux/amd64`, and pushes the commit tag and `latest`. It needs `bash`, `git`,
+Docker with buildx and an authenticated `gcloud` on the machine that runs
+Terraform. The build configures the Docker credential helper with the active
+`gcloud` account, so run `gcloud auth login` as well as the ADC login from the
+first-run section.
+
+The resource runs on the first apply and again when the project, region or
+`cloudshirt_repo_url` changes. To rebuild from a newer `main` without changing
+the infrastructure:
 
 ```bash
-gcloud auth configure-docker europe-west4-docker.pkg.dev
+terraform apply -replace=terraform_data.build_cloudshirt_images
+```
 
-docker tag cloudshirt/web:local \
-  europe-west4-docker.pkg.dev/pcc-2026/cloudshirt-images/cloudshirt:latest
-docker push \
-  europe-west4-docker.pkg.dev/pcc-2026/cloudshirt-images/cloudshirt:latest
+To run the same build outside Terraform, from the repository root:
+
+```bash
+GCP_PROJECT=cloud-orchestration-512823 GCP_REGION=europe-west4 \
+AR_REPO=cloudshirt-images REPO_URL=https://github.com/athype/CloudShirt \
+REPO_REF=main bash scripts/build-and-push.sh
 ```
 
 Private nodes have no general internet egress and no Cloud NAT. They can pull
 from Google-hosted registries through Private Google Access, but an image from
 Docker Hub, MCR (`mcr.microsoft.com`) or another registry must be mirrored into
-Artifact Registry first. For the SQL Server image used by the Kubernetes
-deployment:
+Artifact Registry first. The build script does not mirror the SQL Server image
+used by the Kubernetes deployment; push it once with:
 
 ```bash
+gcloud auth configure-docker europe-west4-docker.pkg.dev
+
 docker pull mcr.microsoft.com/mssql/server:2022-latest
 docker tag mcr.microsoft.com/mssql/server:2022-latest \
-  europe-west4-docker.pkg.dev/pcc-2026/cloudshirt-images/sqlserver:2022-latest
+  europe-west4-docker.pkg.dev/cloud-orchestration-512823/cloudshirt-images/sqlserver:2022-latest
 docker push \
-  europe-west4-docker.pkg.dev/pcc-2026/cloudshirt-images/sqlserver:2022-latest
+  europe-west4-docker.pkg.dev/cloud-orchestration-512823/cloudshirt-images/sqlserver:2022-latest
 ```
 
 If a non-Google registry is needed directly, add Cloud NAT to the VPC instead.
@@ -250,8 +268,8 @@ Check for orphaned persistent disks and forwarding rules left by the
 Kubernetes deployment:
 
 ```bash
-gcloud compute disks list --project pcc-2026 --filter="name~cloudshirt"
-gcloud compute addresses list --project pcc-2026
+gcloud compute disks list --project cloud-orchestration-512823 --filter="name~cloudshirt"
+gcloud compute addresses list --project cloud-orchestration-512823
 ```
 
 The AWS module and this module have separate state and separate lifecycles. Do

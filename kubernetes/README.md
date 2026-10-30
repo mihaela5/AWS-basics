@@ -31,7 +31,9 @@ persistent volume. Run the commands on this page from the repository root.
   and the `cloudshirt-images` Artifact Registry repository.
 - `gcloud` authenticated with access to the project and the GKE cluster.
 - `kubectl` and `gke-gcloud-auth-plugin` installed.
-- The application and SQL Server images pushed to Artifact Registry.
+- The web and API images built by `terraform apply`, and the SQL Server image
+  mirrored into Artifact Registry. See
+  [`terraform/gcp/README.md`](../terraform/gcp/README.md).
 
 The worker nodes are private and have no Cloud NAT. They can reach Artifact
 Registry through Private Google Access, so every image must be mirrored there;

@@ -1,4 +1,3 @@
-
 #!/bin/bash
 set -euo pipefail
 
@@ -18,8 +17,9 @@ fi
 
 # Check out the requested version
 cd "$WORK_DIR"
-git fetch --all --tags
-git checkout --force "$REPO_REF"
+git remote set-url origin "$REPO_URL" 2>/dev/null || git remote add origin "$REPO_URL"
+git fetch origin "$REPO_REF" --tags
+git checkout --force FETCH_HEAD
 
 # Use the exact commit as the image version
 TAG="$(git rev-parse --short=7 HEAD)"
