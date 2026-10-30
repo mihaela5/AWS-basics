@@ -4,7 +4,8 @@
     api_version: apps/v1
     kind: Deployment
     namespace: "{{ cloudshirt_namespace }}"
-    label_selector: app.kubernetes.io/part-of=cloudshirt
+    label_selectors:
+      - app.kubernetes.io/part-of=cloudshirt
   register: verify_deployments
 
 - name: Require the CloudShirt deployments
@@ -30,7 +31,8 @@
     api_version: v1
     kind: Pod
     namespace: "{{ cloudshirt_namespace }}"
-    label_selector: app.kubernetes.io/part-of=cloudshirt
+    label_selectors:
+      - app.kubernetes.io/part-of=cloudshirt
   register: verify_pods
 
 - name: Select the active pods

@@ -28,8 +28,14 @@ echo "Building CloudShirt images for linux/amd64"
 echo "Source commit: $TAG"
 echo "Registry: $REGISTRY"
 
-# Authenticate Docker with Google Artifact Registry
-gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+# Authenticate Docker with Google Artifact Registry. Terraform uses Application
+# Default Credentials, so fall back to the ADC token when no gcloud account is active.
+if gcloud auth print-access-token >/dev/null 2>&1; then
+    gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+else
+    gcloud auth application-default print-access-token \
+        | docker login -u oauth2accesstoken --password-stdin "https://$GCP_REGION-docker.pkg.dev"
+fi
 
 # Build and push the website image
 docker buildx build \

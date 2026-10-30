@@ -5,12 +5,16 @@
 The goal of this project is to design and deploy a cloud infrastructure for CloudShirt, a startup company from Germany. The solution uses Amazon Web Services (AWS) and AWS CloudFormation to automate the deployment and configuration of the infrastructure.
 The application is based on the CloudShirt ASP.NET Core 8.0 web application. The infrastructure includes a Virtual Private Cloud (VPC), subnets across multiple Availability Zones, security groups, Amazon EC2, an Application Load Balancer (ALB), an Auto Scaling Group, Amazon Elastic File System (EFS), Amazon RDS, Amazon S3, and an Elastic Stack monitoring solution.
 The infrastructure is divided into separate CloudFormation templates. A master template, main.yaml, orchestrates the deployment of the individual components. A UserData script automates the installation and configuration of the CloudShirt application on EC2 instances.
-The main objectives are to provide high availability, support scheduled scaling, store application logs centrally, provision a relational database using Infrastructure as Code, and provide monitoring and serverless functionality. Assignment 2, Docker in the Cloud, extends the same solution: the application is containerised, built on a dedicated Buildserver, pushed to a private Amazon ECR registry, and deployed on a Docker Swarm cluster formed by the Auto Scaling Group instances.
+The main objectives are to provide high availability, support scheduled scaling, store application logs centrally, provision a relational database using Infrastructure as Code, and provide monitoring and serverless functionality. Assignment 2, Docker in the Cloud, extends the same solution: the application is containerised, built on a dedicated Buildserver, pushed to a private Amazon ECR registry, and deployed on a Docker Swarm cluster formed by the Auto Scaling Group instances. Assignment 3, Cloud Orchestration, adds a second cloud: Terraform provisions an independent environment on Google Cloud, the application runs on a private GKE cluster from Kubernetes manifests, and Ansible configures the cluster, verifies the deployment and collects the application logs.
 
 ## Solution overview
 CloudShirt is a startup from Germany that wants to run its .NET web shop on AWS. This solution deploys the CloudShirt ASP.NET Core 8 application with one command. A single CloudFormation root stack, CloudShirtInfrastructure, creates ten nested stacks. Customers reach the shop through one Application Load Balancer URL, which spreads traffic over web servers in two Availability Zones. The servers use a private Amazon RDS for SQL Server database, write their logs to Amazon EFS and ship them with Filebeat to an Elastic Stack. A script exports the order table to S3, and a serverless API reads those exports. For Assignment 2 the application is containerised, built nightly on the Buildserver, stored in two private ECR repositories, and run as a Swarm service on the Auto Scaling Group instances.
 
+Assignment 3 moves the application to Kubernetes. `terraform/gcp` creates a dedicated VPC, a private zonal GKE cluster with two workers, an Artifact Registry repository and a Cloud Storage bucket; `terraform/aws` manages the existing CloudFormation stack through Terraform, so both clouds are described as code. The manifests in `kubernetes/` run the website (five replicas), the public API (two replicas) and SQL Server (one stateful pod) in the `cloudshirt` namespace, with the website published through one external IP. Ansible applies the same manifests, verifies the rollout and writes the collected container logs to `logs/`.
+
 ![Overall deployment](./diagrams/deployment.png)
+
+The diagram shows the AWS deployment; the Google Cloud deployment is described in the Cloud Orchestration section.
 
 ## Learning objectives 
 
@@ -121,6 +125,85 @@ The stack outputs `ApiEndpoint`, the invoke URL of the API, and `OrderInsightsFu
 
 Both alarms set `TreatMissingData` to `notBreaching`, so a period without metric data does not raise a false alarm. The stack outputs `AlarmTopicArn`, the SNS topic that the alarms publish to, and `CloudShirtDashboardOutput`, the name of the dashboard.
 
+## Learning objectives - Cloud Orchestration (Assignment 3)
+
+All three learning objectives are met.
+
+| Learning objective | Where it is covered? | How? |
+| --- | --- | --- |
+| 3.1 Provision resources with Terraform in a multi-cloud environment | [terraform/aws](../terraform/aws/README.md)<br>[terraform/gcp](../terraform/gcp/README.md) | Two independent Terraform root modules with separate state: `terraform/aws` manages the existing CloudFormation stack, and `terraform/gcp` creates the VPC, private GKE cluster, node pool, Artifact Registry repository and Cloud Storage bucket on Google Cloud. |
+| 3.2 Deploy a microservices solution on Kubernetes | [kubernetes](../kubernetes/README.md)<br>[scripts/deploy-k8s.sh](../scripts/deploy-k8s.sh) | The website, public API and SQL Server run as separate Kubernetes workloads in the `cloudshirt` namespace, connected through Services; the website has five replicas behind one external IP. |
+| 3.3 Configure a Kubernetes cluster with Ansible | [ansible](../ansible/README.md) | The playbooks prepare the control host, write the kubeconfig with `gcloud container clusters get-credentials`, apply the manifests with the `kubernetes.core` collection, wait for the rollouts and verify the deployment. |
+
+## Requirements - Cloud Orchestration
+
+| REQ | Solution | Files |
+| --- | --- | --- |
+| REQ-15 | **Met.** `terraform/aws` manages the AWS infrastructure through Terraform. It uploads the CloudFormation child templates and the Lambda package to the staging bucket, rewrites the nested `TemplateURL` and `Code` locations to S3, and creates the root `CloudShirtInfrastructure` stack. The CloudFormation templates remain the implementation, so the AWS resources are unchanged. | [terraform/aws](../terraform/aws/README.md)<br>[terraform/aws/main.tf](../terraform/aws/main.tf)<br>[terraform/aws/artifacts.tf](../terraform/aws/artifacts.tf) |
+| REQ-16 | **Met.** The CloudShirt application is deployed to GCP from the manifests in `kubernetes/`, using the Artifact Registry images and the GKE cluster from REQ-19. The same manifests are applied by `scripts/deploy-k8s.sh` and by Ansible. | [kubernetes](../kubernetes/README.md)<br>[scripts/deploy-k8s.sh](../scripts/deploy-k8s.sh) |
+| REQ-17 | **Met.** The `cloudshirt-web` Service has type `LoadBalancer`, so GKE creates one external forwarding rule and IP. The five web pods are the only workloads behind it. | [kubernetes/40-web.yaml](../kubernetes/40-web.yaml) |
+| REQ-18 | **Met.** `terraform/gcp/artifacts.tf` creates the `cloudshirt-images` Artifact Registry repository. `scripts/build-and-push.sh` builds the web and API images, tags them with the commit and `latest`, and pushes them; the SQL Server image is mirrored into the same repository. | [terraform/gcp/artifacts.tf](../terraform/gcp/artifacts.tf)<br>[scripts/build-and-push.sh](../scripts/build-and-push.sh) |
+| REQ-19 | **Met.** `terraform/gcp/cluster.tf` creates the zonal GKE cluster and the two-node node pool, including the private-network configuration, the dedicated node service account and the control-plane authorised networks. No cluster step is manual. | [terraform/gcp/cluster.tf](../terraform/gcp/cluster.tf)<br>[terraform/gcp/iam.tf](../terraform/gcp/iam.tf) |
+| REQ-20 | **Met.** The `cloudshirt-web` Deployment has `replicas: 5`. The `verify` role checks that all five replicas are ready and that the pods are running across the node pool. | [kubernetes/40-web.yaml](../kubernetes/40-web.yaml)<br>[ansible/roles/verify/tasks/main.yml](../ansible/roles/verify/tasks/main.yml) |
+| REQ-21 | **Met.** `ansible-playbook ansible/playbooks/site.yml` runs the `prerequisites`, `gke_access`, `cloudshirt` and `verify` roles. It checks the tools and project, writes the kubeconfig, applies the namespace, configuration, secret and workloads, waits for each rollout and verifies the result. | [ansible](../ansible/README.md)<br>[ansible/playbooks/site.yml](../ansible/playbooks/site.yml) |
+| REQ-22 | **Met.** `ansible-playbook ansible/playbooks/logs.yml` reads every container of every CloudShirt pod with `kubectl logs --timestamps` into a timestamped `logs/` directory and writes a `summary.txt` with the collection context. | [ansible/roles/logs/tasks/main.yml](../ansible/roles/logs/tasks/main.yml)<br>[ansible/playbooks/logs.yml](../ansible/playbooks/logs.yml) |
+
+## GCP and Kubernetes solution
+
+### Infrastructure
+
+`terraform/gcp` is a separate root module with its own state. It creates:
+
+| Resource | Configuration |
+| --- | --- |
+| VPC and subnet | `cloudshirt-gcp-vpc`, `cloudshirt-gke-subnet` (`10.128.0.0/20`) with Private Google Access and secondary ranges for pods (`10.129.0.0/16`) and services (`10.130.0.0/20`) |
+| GKE cluster | Zonal `cloudshirt-gke` in `europe-west4-a`, private nodes, public control-plane endpoint restricted by `admin_cidr_blocks`, Workload Identity and workload logging |
+| Node pool | Two `e2-standard-2` workers with auto-repair and auto-upgrade |
+| Node identity | Dedicated `cloudshirt-gke-nodes` service account with the default node role and repository-scoped Artifact Registry read access |
+| Artifact Registry | `cloudshirt-images` Docker repository in `europe-west4` |
+| Cloud Storage | A bucket for the GCP deployment, named `cloudshirt-<project>-gcp` by default |
+
+The `terraform_data.build_cloudshirt_images` resource runs `scripts/build-and-push.sh` during `apply`; it runs again when the project, region or source URL changes. The AWS and GCP modules are independent: `terraform destroy` in one does not touch the other.
+
+### Kubernetes workloads
+
+| Object | Kind | Role |
+| --- | --- | --- |
+| `cloudshirt` | Namespace | Isolates the application |
+| `cloudshirt-config` | ConfigMap | ASP.NET Core environment, service URLs and log level |
+| `cloudshirt-db` | Secret | SA password and the two connection strings |
+| `cloudshirt-sql` | StatefulSet + Service | SQL Server 2022 with an 8 GiB `ReadWriteOnce` volume |
+| `cloudshirt-api` | Deployment + Service | Public API, two internal replicas |
+| `cloudshirt-web` | Deployment + Service | Website, five replicas behind a `LoadBalancer` |
+
+The API pods wait for the database, the web pods also wait for the API, and all workloads have startup, readiness and liveness probes. The Deployments spread replicas across nodes with `topologySpreadConstraints`. The website is published on port 80 through the single external IP; the API and database stay on ClusterIP Services.
+
+### Ansible
+
+The playbooks run on the operator machine and use the Kubernetes API; there is no SSH to the private nodes. `gke_access` writes the kubeconfig, waits for the API and for every node to be Ready. `cloudshirt` applies the namespace and ConfigMap, creates the database Secret only when it is absent, and applies the SQL Server, API and web manifests with the Artifact Registry image references substituted. It waits for each StatefulSet and Deployment rollout. `verify` checks the replica counts, pod readiness and the external IP, requests the home page and prints a summary. `logs` reuses `gke_access` and writes the container logs with timestamps; SQL Server also keeps its errorlog file on the persistent volume, and GKE forwards the same output to Cloud Logging.
+
+### Verification
+
+The module was applied to the `pcc-2026` project in `europe-west4` on 30 October 2026 (UTC). The live checks were:
+
+| Check | Result |
+| --- | --- |
+| VPC and subnet | `cloudshirt-gcp-vpc` and `cloudshirt-gke-subnet` (`10.128.0.0/20`) created, with Private Google Access |
+| GKE cluster | `cloudshirt-gke` `RUNNING`, GKE 1.36.4, private nodes, `WORKLOADS` logging |
+| Node pool | `cloudshirt-node-pool` `RUNNING`, two `e2-standard-2` nodes, both `Ready` with internal IPs only |
+| Node identity | `cloudshirt-gke-nodes@pcc-2026.iam.gserviceaccount.com` |
+| Artifact Registry | `cloudshirt-images` Docker repository in `europe-west4` |
+| Images | `cloudshirt:45a4af2` and `cloudshirt-api:45a4af2`, both also tagged `latest` |
+| Cloud Storage | `krisz-cac` bucket in `europe-west4` |
+| Capacity | a temporary five-replica `hello-app` Deployment reached five ready replicas across both nodes, then was deleted |
+| Application | `ansible-playbook playbooks/site.yml` deployed the namespace, secret, SQL Server, API and website; web 5/5, API 2/2 and SQL 1/1 ready |
+| Website | `cloudshirt-web` received the external IP `34.90.177.12` and returned HTTP 200 |
+| Logs | `ansible-playbook playbooks/logs.yml` wrote eight container logs under `logs/20261030T231123Z/` with per-line timestamps and `summary.txt` |
+
+The control-plane endpoint is reachable at `34.178.33.158`; `terraform output` also returns the registry URL and the `gcloud container clusters get-credentials` command. The second apply built and pushed both images with the CloudShirt commit tag (`45a4af2`) and `latest`, and a final `terraform plan` reported no changes, so the module is idempotent. Terraform runs the image build with `bash`; on Windows the default resolves to WSL's `bash.exe`, which does not inherit the Terraform environment, so the module takes a `bash_executable` variable and passes it to the `local-exec` interpreter.
+
+The application rollout and the log collection are the Ansible stage (`playbooks/site.yml` and `playbooks/logs.yml`). The live rollout applied the same manifests and the website answered on its external IP; the first run exposed that `kubernetes.core.k8s_info` takes `label_selectors` rather than `label_selector`, which was corrected in the `verify` and `logs` roles. A second `site.yml` run reported 0 changes, so the roles are idempotent. The logs playbook then collected one file per container with per-line timestamps and a summary. The SQL Server image was mirrored into Artifact Registry before the rollout.
+
 ## Justification of choices 
 | Choice | Reason | Trade-off |
 | --- | --- | --- |
@@ -141,6 +224,15 @@ Both alarms set `TreatMissingData` to `notBreaching`, so a period without metric
 | Swarm pool outside the VPC CIDR | `--default-addr-pool 10.100.0.0/16` prevents Docker's default `10.0.0.0/8` pool from overlapping the VPC `10.0.0.0/16` | The pool cannot be changed without recreating the cluster |
 | Single-node Elastic Stack with security disabled | Simplest setup for a lab (REQ-05, REQ-06) | Not suitable for production |
 | CloudWatch alarms and dashboard as an extra stack | Metrics and alerting for the ALB and ASG next to the log analysis in Elastic | Alarm email is optional and empty by default |
+| Terraform wrapper around the CloudFormation stack | Reuses the tested templates and keeps one CloudFormation stack as the unit of deployment | Terraform does not model the individual AWS resources, so drift inside the stack is visible only in CloudFormation |
+| Separate AWS and GCP root modules | Independent state and lifecycles; either cloud can be created or destroyed alone | Two applies and no single dependency graph across both clouds |
+| Private zonal GKE cluster | Private nodes and an IAM-protected control-plane endpoint; two workers are enough for the workload | The control plane and nodes are in one zone, so there is no regional availability |
+| Dedicated node service account | The node identity is limited to logging, monitoring and read access to one repository | One more IAM resource to create and maintain |
+| SQL Server as an in-cluster StatefulSet | Uses the same SQL Server image as the Docker assignment and avoids a managed database cost | One replica; backups, patching and failover are the operator's responsibility |
+| Artifact Registry with the image build in `apply` | Images are versioned with the infrastructure and pulled privately through Private Google Access | `apply` needs Docker, network and credentials; the SQL Server image is mirrored manually |
+| `LoadBalancer` Service for the website | Kubernetes requests one external IP; only the web pods are exposed | One cloud forwarding rule, and the listener is HTTP only |
+| Ansible over the Kubernetes API | No SSH to private nodes; the same idempotent `k8s` apply as the Bash script | The control host needs access to the public endpoint and a Python Kubernetes client |
+| Container logs through `kubectl` and Cloud Logging | No log agent to deploy; each run produces timestamped files with context | Logs are read on demand, and retention depends on the Cloud Logging configuration |
 
 ### Provision flow 
 ![DeploymentOrder](./diagrams/deployment-order.png)
@@ -165,10 +257,20 @@ The prerequisites, stack order, deployment commands and verification steps are i
 - **CI/CD for images:** replace or complement the nightly cron build with a pipeline that builds on every commit, runs the tests and a vulnerability scan, and pushes immutable version tags.
 - **Container monitoring:** ship the Swarm service logs to CloudWatch or the Elastic Stack and alarm on failed tasks, restart loops and unhealthy replicas.
 - **Managed orchestration:** ECS or EKS removes the self-managed Swarm control plane and adds managed rolling updates, service discovery and tighter integration with the ALB and CloudWatch.
+- **Terraform state:** move both root modules to a GCS backend with locking; the current state is local, so a lost workstation loses the mapping between the code and the cloud resources.
+- **Image supply:** add Cloud NAT or a mirror job so the private nodes do not depend on manually mirrored images; the SQL Server image is the remaining manual step.
+- **Database:** move SQL Server to Cloud SQL, or at least add scheduled backups of the `data-cloudshirt-sql-0` volume, because the StatefulSet is a single replica.
+- **Cluster availability:** use a regional cluster and a private control-plane endpoint for production; the current cluster is zonal with a public endpoint.
+- **Secrets:** store the SA password and connection strings in Secret Manager and sync them with External Secrets instead of creating the Kubernetes Secret from an environment variable.
+- **HTTPS:** add a managed certificate and an Ingress or HTTPS load balancer so the website does not serve plain HTTP.
+- **CI/CD:** build the images and run `terraform plan` and `ansible-playbook --check` in a pipeline, and use immutable image tags instead of the `latest` default.
+- **Observability:** enable Cloud Monitoring alerts and a log-based error metric; workload logging is on, but nothing alerts on it.
+- **Capacity:** add a Cluster Autoscaler and PodDisruptionBudgets before production, and review the two-node pool against the five web, two API and one SQL Server pods.
+- **Dependencies:** the image build reports `NU1902` and `NU1903` for `Azure.Identity`, `System.Text.Json` and the Blazor WebAssembly server package; update them in the CloudShirt fork and add a dependency scan to the build.
 
 
 ## Conclusion 
 
-The project defines a modular AWS infrastructure for the CloudShirt application using CloudFormation. The application tier is designed to support high availability across two Availability Zones and scheduled scaling between 18:00 and 20:00 Eastern Time. The solution also provisions EFS, RDS, an Elastic Stack monitoring environment, a CloudWatch stack with alarms, SNS notifications and a dashboard, and a separate serverless stack.
+The project defines a modular multi-cloud infrastructure for the CloudShirt application. The AWS tier uses CloudFormation and supports high availability across two Availability Zones and scheduled scaling between 18:00 and 20:00 Eastern Time. It provisions EFS, RDS, an Elastic Stack monitoring environment, a CloudWatch stack with alarms, SNS notifications and a dashboard, and a separate serverless stack. The Google Cloud tier is an independent Terraform module with a private GKE cluster, Artifact Registry and a Cloud Storage bucket.
 
-The solution covers both assignments. The AWS basics part provides the network, data, monitoring, serverless and application layers, and the Docker part adds the container pipeline: multi-stage images, private ECR repositories, a Buildserver that builds nightly and a Swarm cluster of ASG workers behind the same ALB. The main remaining risks are operational: a single Swarm manager, a cron-driven build without a test gate, and long-lived credentials in user data.
+The solution covers all three assignments. The AWS basics part provides the network, data, monitoring, serverless and application layers, and the Docker part adds the container pipeline: multi-stage images, private ECR repositories, a Buildserver that builds nightly and a Swarm cluster of ASG workers behind the same ALB. The Cloud Orchestration part adds the second cloud: Terraform manages the AWS stack and provisions the GCP environment, Kubernetes runs the website, the API and SQL Server with five web replicas behind one external IP, and Ansible configures the cluster, verifies it and collects the logs. The main remaining risks are operational: a single Swarm manager, a cron-driven build without a test gate, long-lived credentials in user data, local Terraform state, and a single-zone cluster with one SQL Server replica.

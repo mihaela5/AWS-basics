@@ -18,7 +18,8 @@
     api_version: v1
     kind: Pod
     namespace: "{{ cloudshirt_namespace }}"
-    label_selector: app.kubernetes.io/part-of=cloudshirt
+    label_selectors:
+      - app.kubernetes.io/part-of=cloudshirt
   register: logs_pods
 
 - name: Select the active pods

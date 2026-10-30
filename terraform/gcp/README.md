@@ -32,7 +32,9 @@ renumbering.
 - Google Cloud CLI (`gcloud`) with the `gke-gcloud-auth-plugin` component
 - `kubectl`
 - Docker with `buildx`, `git` and `bash` (Git Bash on Windows) for the image
-  build that runs during `terraform apply`
+  build that runs during `terraform apply`. Terraform executes the build script
+  with `bash`; on Windows, set `bash_executable` to Git Bash when WSL's
+  `bash.exe` comes first on `PATH`
 - Application Default Credentials (`gcloud auth application-default login`)
 - A project with billing enabled
 - Permissions to create networks, GKE clusters, service accounts and Artifact
@@ -66,6 +68,9 @@ admin_cidr_blocks = ["0.0.0.0/0"]
 
 gke_node_count   = 2
 gke_machine_type = "e2-standard-2"
+
+# Windows only: use Git Bash when WSL's bash.exe comes first on PATH.
+# bash_executable = "C:/Program Files/Git/bin/bash.exe"
 ```
 
 `terraform.tfvars` is ignored by Git. `gcp_bucket_name` is optional and defaults
@@ -191,10 +196,10 @@ API images with `scripts/build-and-push.sh`, through the
 `terraform_data.build_cloudshirt_images` resource. The script clones
 `cloudshirt_repo_url`, checks out `main`, builds both Dockerfiles for
 `linux/amd64`, and pushes the commit tag and `latest`. It needs `bash`, `git`,
-Docker with buildx and an authenticated `gcloud` on the machine that runs
-Terraform. The build configures the Docker credential helper with the active
-`gcloud` account, so run `gcloud auth login` as well as the ADC login from the
-first-run section.
+Docker with buildx and Google Cloud credentials on the machine that runs
+Terraform. The build configures Docker with the active `gcloud` account, or
+with the Application Default Credentials when no account is active, so the
+`gcloud auth application-default login` from the first-run section is enough.
 
 The resource runs on the first apply and again when the project, region or
 `cloudshirt_repo_url` changes. To rebuild from a newer `main` without changing
@@ -260,6 +265,10 @@ Destroy the GCP resources from this directory:
 ```bash
 terraform destroy
 ```
+
+To release the LoadBalancer and the SQL disk before the cluster disappears,
+run `bash scripts/teardown-gcp.sh` from the repository root instead; it deletes
+the `cloudshirt` namespace and then runs `terraform destroy`.
 
 The cluster and node pool are deleted first. The Artifact Registry repository
 and its images are deleted as well, so capture evidence before destroying. The

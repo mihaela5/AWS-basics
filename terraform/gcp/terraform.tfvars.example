@@ -10,3 +10,6 @@ admin_cidr_blocks = ["0.0.0.0/0"]
 
 gke_node_count   = 2
 gke_machine_type = "e2-standard-2"
+
+# On Windows, Terraform resolves "bash" through cmd. Point it at Git Bash when WSL's bash.exe comes first on PATH.
+# bash_executable = "C:/Program Files/Git/bin/bash.exe"

@@ -105,6 +105,11 @@ In WSL, keep the checkout in the Linux filesystem. Ansible ignores
 inventory and roles are not found. If the checkout has to stay on `/mnt/c`,
 run the playbooks with `ANSIBLE_CONFIG="$PWD/ansible.cfg" ansible-playbook ...`.
 
+Ansible uses the `gcloud` on `PATH`. When WSL runs the Windows Cloud SDK, set
+`CLOUDSDK_CONFIG` to the Windows configuration so `gcloud` and
+`gke-gcloud-auth-plugin` see the account from `gcloud auth login`, for example
+`export CLOUDSDK_CONFIG=/mnt/c/Users/<user>/AppData/Roaming/gcloud`.
+
 ## Configure and deploy
 
 ```bash
@@ -226,7 +231,6 @@ example `2026-10-30T22:31:04.123456789Z`. `summary.txt` adds the collection
 time, project, zone, cluster, namespace, `--since` window, pods and nodes, and
 the result of each `kubectl logs` call. The files are working copies, not
 sources, so `logs/` is in `.gitignore`.
-```
 
 ## Cleanup
 
