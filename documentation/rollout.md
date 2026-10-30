@@ -13,6 +13,8 @@ Stack updates change the launch template, but running instances are not replaced
 
 ## GCP (Assignment 3)
 
+From the repository root, `bash scripts/provision-gcp.sh` runs steps 2–4 in one go: Terraform, the SQL Server image mirror and Ansible. The prerequisites in step 1 still apply.
+
 1. **Prerequisites:** Terraform >= 1.5, Docker with buildx, `bash` and `git`. On Windows, set `bash_executable` to the Git Bash executable in `terraform/gcp/terraform.tfvars`. Terraform authenticates with Application Default Credentials (`gcloud auth application-default login`); the Ansible stage needs an active gcloud account (`gcloud auth login`). Enable the APIs listed in [`terraform/gcp/README.md`](../terraform/gcp/README.md) and create `terraform/gcp/terraform.tfvars` from the example.
 2. **Infrastructure:** run `terraform -chdir=terraform/gcp init`, `terraform plan` and `terraform apply`. The apply creates the VPC, the private zonal GKE cluster, the node pool, the node service account, the `cloudshirt-images` repository and the bucket, then runs `scripts/build-and-push.sh` to build and push the web and API images.
 3. **SQL Server image:** mirror `mcr.microsoft.com/mssql/server:2022-latest` into `cloudshirt-images/sqlserver:2022-latest`; the private nodes cannot pull from MCR. The commands are in `terraform/gcp/README.md`.

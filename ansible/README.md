@@ -121,6 +121,9 @@ ansible-playbook playbooks/site.yml
 `SA_PASSWORD` is read from the environment rather than passed with `-e`, so it
 does not appear in the `ansible-playbook` command line.
 
+From the repository root, `bash scripts/provision-gcp.sh` runs the Terraform
+stage, mirrors the SQL Server image and then this playbook in one step.
+
 The play applies the following in order:
 
 1. `prerequisites` checks gcloud, kubectl and the GKE authentication plugin,

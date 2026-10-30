@@ -188,6 +188,9 @@ the kubeconfig and applies the manifests. It is a separate step after
 `terraform apply`; this module builds the web and API images during apply, but
 does not invoke Ansible.
 
+To run Terraform, mirror the SQL Server image and deploy with Ansible in one
+step, run `bash scripts/provision-gcp.sh` from the repository root.
+
 ## Images and Artifact Registry
 
 The node service account already has `roles/artifactregistry.reader` on the
