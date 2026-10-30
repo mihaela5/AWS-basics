@@ -1,0 +1,22 @@
+---
+# Cluster identity. The defaults match terraform/gcp and scripts/deploy-k8s.sh;
+# override them with the environment variables or extra vars when needed.
+gcp_project_id: "{{ lookup('env', 'GCP_PROJECT_ID') | default('', true) }}"
+gcp_region: "{{ lookup('env', 'GCP_REGION') | default('europe-west4', true) }}"
+gcp_zone: "{{ lookup('env', 'GCP_ZONE') | default('europe-west4-a', true) }}"
+gke_cluster_name: "{{ lookup('env', 'GKE_CLUSTER_NAME') | default('cloudshirt-gke', true) }}"
+gke_min_ready_nodes: 2
+
+# Application images from the Artifact Registry repository in terraform/gcp.
+cloudshirt_namespace: cloudshirt
+cloudshirt_repository: cloudshirt-images
+cloudshirt_image_tag: "{{ lookup('env', 'IMAGE_TAG') | default('latest', true) }}"
+cloudshirt_registry: >-
+  {{ lookup('env', 'ARTIFACT_REGISTRY')
+     | default(gcp_region ~ '-docker.pkg.dev/' ~ gcp_project_id ~ '/' ~ cloudshirt_repository, true) }}
+cloudshirt_web_image: "{{ cloudshirt_registry }}/cloudshirt:{{ cloudshirt_image_tag }}"
+cloudshirt_api_image: "{{ cloudshirt_registry }}/cloudshirt-api:{{ cloudshirt_image_tag }}"
+cloudshirt_sql_image: "{{ cloudshirt_registry }}/sqlserver:2022-latest"
+
+# The manifests are shared with scripts/deploy-k8s.sh.
+cloudshirt_manifest_dir: "{{ playbook_dir | dirname | dirname }}/kubernetes"

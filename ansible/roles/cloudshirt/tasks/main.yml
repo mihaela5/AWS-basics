@@ -1,0 +1,132 @@
+---
+- name: Apply the namespace
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition: "{{ lookup('file', cloudshirt_manifest_dir ~ '/00-namespace.yaml') | from_yaml }}"
+
+- name: Apply the application configuration
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition: "{{ lookup('file', cloudshirt_manifest_dir ~ '/10-config.yaml') | from_yaml }}"
+
+- name: Read the database secret
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    namespace: "{{ cloudshirt_namespace }}"
+    name: cloudshirt-db
+  register: cloudshirt_db_secret
+  no_log: true
+
+- name: Validate the database password for a new secret
+  ansible.builtin.assert:
+    that:
+      - cloudshirt_sa_password | length >= 8
+      - "';' not in cloudshirt_sa_password"
+    fail_msg: "Set SA_PASSWORD with at least 8 characters and no ';'."
+  when: cloudshirt_db_secret.resources | length == 0
+
+- name: Check the existing database password
+  ansible.builtin.assert:
+    that:
+      - cloudshirt_db_secret.resources[0].data.SA_PASSWORD | b64decode == cloudshirt_sa_password
+    fail_msg: >-
+      The cloudshirt-db secret already exists with a different SA_PASSWORD.
+      Reuse the stored password or delete the secret and the SQL volume before changing it.
+  when:
+    - cloudshirt_db_secret.resources | length > 0
+    - cloudshirt_sa_password | length > 0
+
+- name: Create the database secret
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: cloudshirt-db
+        namespace: "{{ cloudshirt_namespace }}"
+        labels:
+          app.kubernetes.io/part-of: cloudshirt
+      stringData:
+        SA_PASSWORD: "{{ cloudshirt_sa_password }}"
+        CatalogConnection: >-
+          {{ 'Server=cloudshirt-sql,1433;Initial Catalog=Microsoft.eShopOnWeb.CatalogDb;'
+             ~ 'User Id=sa;Password=' ~ cloudshirt_sa_password
+             ~ ';TrustServerCertificate=True' }}
+        IdentityConnection: >-
+          {{ 'Server=cloudshirt-sql,1433;Initial Catalog=Microsoft.eShopOnWeb.Identity;'
+             ~ 'User Id=sa;Password=' ~ cloudshirt_sa_password
+             ~ ';TrustServerCertificate=True' }}
+  when: cloudshirt_db_secret.resources | length == 0
+  no_log: true
+
+- name: Apply the SQL Server manifests
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition: >-
+      {{ lookup('file', cloudshirt_manifest_dir ~ '/20-sqlserver.yaml')
+         | replace('__SQL_IMAGE__', cloudshirt_sql_image)
+         | from_yaml_all | list }}
+
+- name: Wait for SQL Server
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: StatefulSet
+    namespace: "{{ cloudshirt_namespace }}"
+    name: cloudshirt-sql
+  register: cloudshirt_sql
+  until: >-
+    cloudshirt_sql.resources | default([]) | length == 1 and
+    cloudshirt_sql.resources[0].status.readyReplicas | default(0) == cloudshirt_sql.resources[0].spec.replicas
+  retries: "{{ cloudshirt_rollout_retries | int }}"
+  delay: "{{ cloudshirt_rollout_delay | int }}"
+
+- name: Apply the public API manifests
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition: >-
+      {{ lookup('file', cloudshirt_manifest_dir ~ '/30-publicapi.yaml')
+         | replace('__API_IMAGE__', cloudshirt_api_image)
+         | from_yaml_all | list }}
+
+- name: Wait for the public API
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ cloudshirt_namespace }}"
+    name: cloudshirt-api
+  register: cloudshirt_api
+  until: >-
+    cloudshirt_api.resources | default([]) | length == 1 and
+    cloudshirt_api.resources[0].status.readyReplicas | default(0) == cloudshirt_api.resources[0].spec.replicas and
+    cloudshirt_api.resources[0].status.updatedReplicas | default(0) == cloudshirt_api.resources[0].spec.replicas
+  retries: "{{ cloudshirt_rollout_retries | int }}"
+  delay: "{{ cloudshirt_rollout_delay | int }}"
+
+- name: Apply the website manifests
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition: >-
+      {{ lookup('file', cloudshirt_manifest_dir ~ '/40-web.yaml')
+         | replace('__WEB_IMAGE__', cloudshirt_web_image)
+         | from_yaml_all | list }}
+
+- name: Wait for the website
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ cloudshirt_namespace }}"
+    name: cloudshirt-web
+  register: cloudshirt_web
+  until: >-
+    cloudshirt_web.resources | default([]) | length == 1 and
+    cloudshirt_web.resources[0].status.readyReplicas | default(0) == cloudshirt_web.resources[0].spec.replicas and
+    cloudshirt_web.resources[0].status.updatedReplicas | default(0) == cloudshirt_web.resources[0].spec.replicas
+  retries: "{{ cloudshirt_rollout_retries | int }}"
+  delay: "{{ cloudshirt_rollout_delay | int }}"

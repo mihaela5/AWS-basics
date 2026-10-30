@@ -1,0 +1,4 @@
+---
+gke_access_api_retries: 30
+gke_access_api_delay: 10
+gke_access_node_ready_timeout: 300

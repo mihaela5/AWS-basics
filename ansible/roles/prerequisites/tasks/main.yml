@@ -1,0 +1,83 @@
+---
+- name: Check for the required command-line tools
+  ansible.builtin.command: "which {{ item }}"
+  loop:
+    - gcloud
+    - kubectl
+    - gke-gcloud-auth-plugin
+  register: prerequisites_tools
+  changed_when: false
+  failed_when: false
+
+- name: Require the Google Cloud CLI
+  ansible.builtin.assert:
+    that: prerequisites_tools.results[0].rc == 0
+    fail_msg: "gcloud is not on PATH. Install the Google Cloud CLI and run 'gcloud auth login'."
+
+- name: Install the missing gcloud components
+  ansible.builtin.command: gcloud components install kubectl gke-gcloud-auth-plugin --quiet
+  when: prerequisites_tools.results[1].rc != 0 or prerequisites_tools.results[2].rc != 0
+  register: prerequisites_components
+  changed_when: true
+  failed_when: false
+
+- name: Require kubectl and the GKE authentication plugin
+  ansible.builtin.assert:
+    that: prerequisites_components.rc | default(0) == 0
+    fail_msg: >-
+      gcloud could not install kubectl and gke-gcloud-auth-plugin.
+      Install them with your package manager and rerun the playbook.
+  when: prerequisites_tools.results[1].rc != 0 or prerequisites_tools.results[2].rc != 0
+
+- name: Read the active gcloud account
+  ansible.builtin.command: gcloud auth list --filter=status:ACTIVE --format=value(account)
+  register: prerequisites_account
+  changed_when: false
+
+- name: Require an authenticated gcloud account
+  ansible.builtin.assert:
+    that: prerequisites_account.stdout | trim | length > 0
+    fail_msg: "No active gcloud account. Run 'gcloud auth login' before the playbook."
+
+- name: Read the configured gcloud project
+  ansible.builtin.command: gcloud config get-value project
+  register: prerequisites_project
+  changed_when: false
+  when: gcp_project_id | default('', true) | length == 0
+
+# gcp_project_id is an inventory variable shared by all roles.
+- name: Use the configured gcloud project
+  ansible.builtin.set_fact:
+    gcp_project_id: "{{ prerequisites_project.stdout | trim }}"  # noqa: var-naming[no-role-prefix]
+  when: gcp_project_id | default('', true) | length == 0
+
+- name: Require a Google Cloud project
+  ansible.builtin.assert:
+    that: (gcp_project_id | default('')) not in ['', '(unset)']
+    fail_msg: "Set gcp_project_id or run 'gcloud config set project PROJECT_ID'."
+
+- name: Check the Kubernetes Python client
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "-c"
+      - "import kubernetes"
+  register: prerequisites_kubernetes_client
+  changed_when: false
+  failed_when: false
+
+- name: Install the Kubernetes Python client
+  ansible.builtin.pip:
+    name: "kubernetes>=28.1.0"
+    state: present
+  when: prerequisites_kubernetes_client.rc != 0
+
+- name: List the installed Ansible collections
+  ansible.builtin.command: ansible-galaxy collection list
+  register: prerequisites_collections
+  changed_when: false
+
+- name: Require the kubernetes.core collection
+  ansible.builtin.assert:
+    that: prerequisites_collections.stdout_lines | select('match', '^kubernetes\.core\s') | list | length > 0
+    fail_msg: "Install the collection: ansible-galaxy collection install -r requirements.yml"

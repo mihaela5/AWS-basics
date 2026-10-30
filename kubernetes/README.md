@@ -23,9 +23,7 @@ persistent volume. Run the commands on this page from the repository root.
 | REQ-18 | Every image reference points at the `cloudshirt-images` Artifact Registry repository. |
 | REQ-19 | `terraform/gcp/cluster.tf` provisions the GKE cluster and its node pool. |
 | REQ-20 | `cloudshirt-web` runs five replicas on the node pool managed by the GKE control plane. |
-
-REQ-21 and REQ-22 are covered by issues 50 and 51, which apply and verify this
-configuration and collect the container logs from Cloud Logging.
+| REQ-21 | [`ansible/`](../ansible/README.md) prepares the control host, writes the kubeconfig and applies these manifests with the `kubernetes.core` roles. |
 
 ## Prerequisites
 
