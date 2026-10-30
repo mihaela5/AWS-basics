@@ -1,6 +1,7 @@
 variable "gcp_project_id" {
   description = "Google Cloud project ID for the GCP deployment"
   type        = string
+  default     = "cloud-orchestration-512823"
 
   validation {
     condition     = can(regex("^[a-z][a-z0-9-]{4,28}[a-z0-9]$", var.gcp_project_id))
@@ -31,8 +32,9 @@ variable "gcp_zone" {
 }
 
 variable "admin_cidr_blocks" {
-  description = "IPv4 CIDR blocks allowed to reach the public GKE control-plane endpoint. Set this explicitly for your environment; the example uses 0.0.0.0/0 for lab convenience."
+  description = "IPv4 CIDR blocks allowed to reach the public GKE control-plane endpoint."
   type        = list(string)
+  default     = ["0.0.0.0/0"]
 
   validation {
     condition     = length(var.admin_cidr_blocks) > 0 && alltrue([for cidr in var.admin_cidr_blocks : can(cidrnetmask(cidr))])
@@ -95,3 +97,10 @@ variable "gke_master_ipv4_cidr_block" {
     error_message = "gke_master_ipv4_cidr_block must be an IPv4 /28 CIDR block."
   }
 }
+
+variable "cloudshirt_repo_url" {
+  description = "Git URL of the CloudShirt source repository to build images from"
+  type        = string
+  default     = "https://github.com/athype/CloudShirt"
+}
+

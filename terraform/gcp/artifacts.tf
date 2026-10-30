@@ -31,3 +31,28 @@ resource "google_artifact_registry_repository" "cloudshirt_images" {
     environment = "development"
   }
 }
+
+resource "terraform_data" "build_cloudshirt_images" {
+  triggers_replace = [
+    var.gcp_project_id,
+    var.gcp_region,
+    var.cloudshirt_repo_url
+  ]
+
+  depends_on = [
+    google_artifact_registry_repository.cloudshirt_images
+  ]
+
+  provisioner "local-exec" {
+    command = "bash ../../scripts/build-and-push.sh"
+
+    environment = {
+      GCP_PROJECT = var.gcp_project_id
+      GCP_REGION  = var.gcp_region
+      AR_REPO     = google_artifact_registry_repository.cloudshirt_images.repository_id
+      REPO_URL    = var.cloudshirt_repo_url
+      REPO_REF    = "main"
+    }
+  }
+}
+
