@@ -42,12 +42,31 @@ REQ-21 is covered by these roles. REQ-22 (log collection, issue 51) adds a
 separate playbook to this project; the `gke_access` role is independent of the
 deployment roles so it can be reused there.
 
+## Rollout order
+
+Terraform and Ansible are separate stages:
+
+1. `terraform -chdir=terraform/gcp apply` creates the VPC, cluster, node pool,
+   Artifact Registry repository and bucket. The cluster starts with only the GKE
+   system pods; no CloudShirt workload exists yet.
+2. Build and push the web, API and SQL Server images to Artifact Registry. The
+   private nodes cannot pull from Docker Hub or MCR.
+3. `ansible-playbook playbooks/site.yml` writes the kubeconfig, applies the
+   manifests and waits until the website answers on its external IP.
+
+Terraform does not invoke Ansible. Keeping the stages separate means
+`terraform apply` only manages infrastructure, the kubeconfig is written by
+Ansible rather than Terraform, and the application can be redeployed without
+recreating the cluster. A wrapper script or CI job can call all three steps in
+order. A Terraform `local-exec` provisioner is not used: it would run Ansible on
+whichever machine applies Terraform and still would not build the images.
+
 ## Prerequisites
 
 - Ansible runs on a Linux or macOS control host. On Windows use WSL (Ubuntu) or
   the Google Cloud Shell; Ansible does not run natively on Windows.
-- Python 3.11 or newer with `pip`. On Ubuntu, install `python3-venv` if
-  `python3 -m venv` reports that `ensurepip` is missing.
+- Python 3.11 or newer. The setup uses `uv` when it is installed; otherwise
+  install `python3-venv` and `pip` (on Ubuntu, `sudo apt install python3-venv`).
 - The GCP resources in [`terraform/gcp`](../terraform/gcp/README.md) applied:
   the cluster, the node pool and the `cloudshirt-images` repository.
 - The application, API and SQL Server images pushed to Artifact Registry. The
@@ -62,6 +81,19 @@ deployment roles so it can be reused there.
 
 ## Setup
 
+With `uv` (recommended; it creates the virtual environment without the
+`python3-venv` package):
+
+```bash
+cd ansible
+uv venv .venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+ansible-galaxy collection install -r requirements.yml
+```
+
+Without `uv`:
+
 ```bash
 cd ansible
 python3 -m venv .venv
@@ -69,6 +101,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ansible-galaxy collection install -r requirements.yml
 ```
+
+Both paths install `ansible-core` and the Kubernetes Python client in the same
+environment. Ansible itself is Python, so this step cannot be skipped; the
+`kubernetes.core` collection will not run without the client package.
 
 In WSL, keep the checkout in the Linux filesystem. Ansible ignores
 `ansible.cfg` in a world-writable directory such as `/mnt/c`, and then the

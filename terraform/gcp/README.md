@@ -175,6 +175,12 @@ The CloudShirt workload is described in
 reads the project, region, zone, cluster name and registry URL from this
 module's state when they are not passed as environment variables.
 
+[`ansible/`](../../ansible/README.md) performs the same rollout through Ansible:
+`ansible-playbook ansible/playbooks/site.yml` prepares the control host, writes
+the kubeconfig and applies the manifests. It is a separate step after
+`terraform apply` and after the images are pushed; this module does not invoke
+it.
+
 ## Images and Artifact Registry
 
 The node service account already has `roles/artifactregistry.reader` on the
