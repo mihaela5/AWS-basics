@@ -1,0 +1,32 @@
+---
+- name: Write the kubeconfig for the cluster
+  ansible.builtin.command: >-
+    gcloud container clusters get-credentials {{ gke_cluster_name }}
+    --location {{ gcp_zone }}
+    --project {{ gcp_project_id }}
+  changed_when: false
+
+- name: Wait for the Kubernetes API
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Namespace
+    name: default
+  register: gke_access_default_namespace
+  until: gke_access_default_namespace.resources | default([]) | length == 1
+  retries: "{{ gke_access_api_retries | int }}"
+  delay: "{{ gke_access_api_delay | int }}"
+
+- name: Wait for the node pool
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+  register: gke_access_nodes
+  until: gke_access_nodes.resources | default([]) | length >= gke_min_ready_nodes | int
+  retries: "{{ gke_access_api_retries | int }}"
+  delay: "{{ gke_access_api_delay | int }}"
+
+- name: Wait for every node to be Ready
+  ansible.builtin.command: >-
+    kubectl wait node --all --for=condition=Ready
+    --timeout={{ gke_access_node_ready_timeout }}s
+  changed_when: false

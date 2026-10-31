@@ -1,0 +1,8 @@
+---
+- name: Verify the CloudShirt deployment
+  hosts: gke
+  gather_facts: false
+  roles:
+    - prerequisites
+    - gke_access
+    - verify

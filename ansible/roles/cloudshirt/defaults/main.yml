@@ -1,0 +1,4 @@
+---
+cloudshirt_sa_password: "{{ lookup('env', 'SA_PASSWORD') | default('', true) }}"
+cloudshirt_rollout_retries: 60
+cloudshirt_rollout_delay: 10

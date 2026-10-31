@@ -1,4 +1,3 @@
-
 #!/bin/bash
 set -euo pipefail
 
@@ -18,8 +17,9 @@ fi
 
 # Check out the requested version
 cd "$WORK_DIR"
-git fetch --all --tags
-git checkout --force "$REPO_REF"
+git remote set-url origin "$REPO_URL" 2>/dev/null || git remote add origin "$REPO_URL"
+git fetch origin "$REPO_REF" --tags
+git checkout --force FETCH_HEAD
 
 # Use the exact commit as the image version
 TAG="$(git rev-parse --short=7 HEAD)"
@@ -28,8 +28,10 @@ echo "Building CloudShirt images for linux/amd64"
 echo "Source commit: $TAG"
 echo "Registry: $REGISTRY"
 
-# Authenticate Docker with Google Artifact Registry
-gcloud auth configure-docker "$GCP_REGION-docker.pkg.dev" --quiet
+# Use an OAuth access token for Docker; this works with an active gcloud account
+# or Application Default Credentials and avoids the gcloud credential helper.
+TOKEN="$(gcloud auth print-access-token 2>/dev/null || gcloud auth application-default print-access-token)"
+printf '%s' "$TOKEN" | docker login -u oauth2accesstoken --password-stdin "https://$GCP_REGION-docker.pkg.dev"
 
 # Build and push the website image
 docker buildx build \

@@ -1,0 +1,4 @@
+---
+verify_lb_retries: 60
+verify_lb_delay: 10
+verify_http: true

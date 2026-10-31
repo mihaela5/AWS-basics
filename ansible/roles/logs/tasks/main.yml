@@ -1,0 +1,85 @@
+---
+- name: Record the collection time
+  ansible.builtin.set_fact:
+    logs_started_at: "{{ now(utc=true) }}"
+
+- name: Set the log directory for this run
+  ansible.builtin.set_fact:
+    logs_run_dir: "{{ logs_output_dir }}/{{ logs_started_at.strftime('%Y%m%dT%H%M%SZ') }}"
+
+- name: Create the log directory
+  ansible.builtin.file:
+    path: "{{ logs_run_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Read the CloudShirt pods
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ cloudshirt_namespace }}"
+    label_selectors:
+      - app.kubernetes.io/part-of=cloudshirt
+  register: logs_pods
+
+- name: Select the active pods
+  ansible.builtin.set_fact:
+    logs_active_pods: "{{ logs_pods.resources | rejectattr('metadata.deletionTimestamp', 'defined') | list }}"
+
+- name: Require the CloudShirt pods
+  ansible.builtin.assert:
+    that: logs_active_pods | length > 0
+    fail_msg: "No CloudShirt pods found in namespace {{ cloudshirt_namespace }}. Deploy the application first."
+
+- name: Collect the container logs
+  ansible.builtin.command:
+    argv:
+      - kubectl
+      - logs
+      - "{{ item.0.metadata.name }}"
+      - "--namespace={{ cloudshirt_namespace }}"
+      - "--container={{ item.1.name }}"
+      - --timestamps
+      - "--since={{ logs_since }}"
+  loop: "{{ logs_active_pods | subelements('spec.containers') }}"
+  loop_control:
+    label: "{{ item.0.metadata.name }}/{{ item.1.name }}"
+  register: logs_container_output
+  changed_when: false
+  failed_when: false
+
+- name: Write the container logs
+  ansible.builtin.copy:
+    content: "{{ item.stdout }}{{ ('\n# kubectl logs: ' ~ (item.stderr | trim)) if item.rc != 0 else '' }}"
+    dest: "{{ logs_run_dir }}/{{ item.item.0.metadata.name }}_{{ item.item.1.name }}.log"
+    mode: "0640"
+  loop: "{{ logs_container_output.results }}"
+  loop_control:
+    label: "{{ item.item.0.metadata.name }}/{{ item.item.1.name }}"
+
+- name: Write the collection summary
+  ansible.builtin.copy:
+    content: |
+      Collected at: {{ logs_started_at.strftime('%Y-%m-%dT%H:%M:%SZ') }}
+      Source: kubectl logs --timestamps --since={{ logs_since }}
+      Project: {{ gcp_project_id }}
+      Zone: {{ gcp_zone }}
+      Cluster: {{ gke_cluster_name }}
+      Namespace: {{ cloudshirt_namespace }}
+      Pods:
+      {% for pod in logs_active_pods %}
+      - {{ pod.metadata.name }} ({{ pod.status.phase }}, node {{ pod.spec.nodeName }})
+      {% endfor %}
+      Logs:
+      {% for result in logs_container_output.results %}
+      - {{ result.item.0.metadata.name }}/{{ result.item.1.name }}: {{ 'ok' if result.rc == 0 else (result.stderr | trim) }}
+      {% endfor %}
+    dest: "{{ logs_run_dir }}/summary.txt"
+    mode: "0640"
+
+- name: Show the collected logs
+  ansible.builtin.debug:
+    msg:
+      - "Pods: {{ logs_active_pods | length }}"
+      - "Log files: {{ logs_container_output.results | length }}"
+      - "Destination: {{ logs_run_dir }}"

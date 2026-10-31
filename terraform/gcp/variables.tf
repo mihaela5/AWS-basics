@@ -104,3 +104,9 @@ variable "cloudshirt_repo_url" {
   default     = "https://github.com/athype/CloudShirt"
 }
 
+variable "bash_executable" {
+  description = "Bash interpreter that runs scripts/build-and-push.sh. On Windows use the Git Bash executable when WSL's bash is first on PATH."
+  type        = string
+  default     = "bash"
+}
+

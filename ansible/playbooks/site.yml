@@ -1,0 +1,9 @@
+---
+- name: Configure the CloudShirt GKE cluster
+  hosts: gke
+  gather_facts: false
+  roles:
+    - prerequisites
+    - gke_access
+    - cloudshirt
+    - verify

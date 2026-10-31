@@ -1,5 +1,6 @@
 __pycache__/
 *.py[cod]
+.venv/
 
 # Terraform
 .terraform/
@@ -13,3 +14,6 @@ crash.*.log
 
 # CloudFormation packaging output
 packaged-main.yaml
+
+# Collected application logs
+/logs/

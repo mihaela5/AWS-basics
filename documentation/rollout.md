@@ -1,6 +1,6 @@
 # Roll-out
 
-Prerequisites, stack order, commands and verification for the CloudShirt infrastructure and the Docker extension. The stack order is shown in [deployment-order.png](./diagrams/deployment-order.png).
+Prerequisites, stack order, commands and verification for the CloudShirt AWS infrastructure, the Docker extension and the Google Cloud deployment. The AWS stack order is shown in [deployment-order.png](./diagrams/deployment-order.png).
 
 1. **Prerequisites:** AWS CLI v2, active AWS Academy credentials (refresh them whenever the lab restarts), the key pair `vockey`, and the repository pushed to GitHub with `scripts/userdata.sh` on `main`. For the Docker part, the Buildserver must reach GitHub and ECR through the NAT gateway, and the CloudShirt fork must contain the Dockerfiles and `docker-compose.yml`.
 2. **Stack order:** `provision.sh` deploys `main.yaml`, which creates `NetworkingStack` and `SecurityStack` first, then `StorageStack`, `DatabaseStack`, `MonitoringStack` and `BuildserverStack`; `EcrStack` is independent and builds in parallel. `ApplicationStack` follows and depends on `BuildserverStack`, so the Swarm manager exists before the workers try to join. `ServerlessStack` depends on the networking and storage stacks, and `CloudwatchStack` depends on the application stack.
@@ -10,3 +10,15 @@ Prerequisites, stack order, commands and verification for the CloudShirt infrast
 6. **Tear down:** `bash scripts/provision.sh --delete`. The export bucket (`DeletionPolicy: Retain`), the staging bucket and the final RDS snapshot are kept on purpose and can be removed manually.
 
 Stack updates change the launch template, but running instances are not replaced automatically. Start an instance refresh on the Auto Scaling Group or replace the instances to apply the change.
+
+## GCP (Assignment 3)
+
+From the repository root, `bash scripts/provision-gcp.sh` runs steps 2–4 in one go: Terraform, the SQL Server image mirror and Ansible. The prerequisites in step 1 still apply.
+
+1. **Prerequisites:** Terraform >= 1.5, Docker with buildx, `bash` and `git`. On Windows, set `bash_executable` to the Git Bash executable in `terraform/gcp/terraform.tfvars`. Terraform authenticates with Application Default Credentials (`gcloud auth application-default login`); the Ansible stage needs an active gcloud account (`gcloud auth login`). Enable the APIs listed in [`terraform/gcp/README.md`](../terraform/gcp/README.md) and create `terraform/gcp/terraform.tfvars` from the example.
+2. **Infrastructure:** run `terraform -chdir=terraform/gcp init`, `terraform plan` and `terraform apply`. The apply creates the VPC, the private zonal GKE cluster, the node pool, the node service account, the `cloudshirt-images` repository and the bucket, then runs `scripts/build-and-push.sh` to build and push the web and API images.
+3. **SQL Server image:** mirror `mcr.microsoft.com/mssql/server:2022-latest` into `cloudshirt-images/sqlserver:2022-latest`; the private nodes cannot pull from MCR. The commands are in `terraform/gcp/README.md`.
+4. **Deploy:** export `GCP_PROJECT_ID` and `SA_PASSWORD`, then run `cd ansible && ansible-playbook playbooks/site.yml`. The play writes the kubeconfig, applies the namespace, configuration, secret and workloads, and waits for the five web replicas and the external IP.
+5. **Verify:** `kubectl -n cloudshirt get pods -o wide`, `kubectl -n cloudshirt get service cloudshirt-web`, open `http://<external-ip>/`, and rerun `ansible-playbook playbooks/verify.yml`.
+6. **Logs:** `ansible-playbook playbooks/logs.yml` writes `logs/<UTC timestamp>/` with one file per container and a `summary.txt`; `gcloud logging read` shows the same workload records in Cloud Logging.
+7. **Tear down:** run `bash scripts/teardown-gcp.sh`. It deletes the `cloudshirt` namespace first, releasing the LoadBalancer and the SQL disk, then runs `terraform destroy`. Empty the bucket first if `force_destroy = false` blocks the delete.

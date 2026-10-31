@@ -1,0 +1,93 @@
+---
+- name: Read the CloudShirt deployments
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    namespace: "{{ cloudshirt_namespace }}"
+    label_selectors:
+      - app.kubernetes.io/part-of=cloudshirt
+  register: verify_deployments
+
+- name: Require the CloudShirt deployments
+  ansible.builtin.assert:
+    that:
+      - verify_deployments.resources | map(attribute='metadata.name') | sort == ['cloudshirt-api', 'cloudshirt-web']
+    fail_msg: "Expected the cloudshirt-api and cloudshirt-web Deployments in namespace {{ cloudshirt_namespace }}."
+
+- name: Check the deployment replicas
+  ansible.builtin.assert:
+    that:
+      - item.status.readyReplicas | default(0) == item.spec.replicas
+      - item.status.updatedReplicas | default(0) == item.spec.replicas
+    fail_msg: >-
+      {{ item.metadata.name }} has
+      {{ item.status.readyReplicas | default(0) }}/{{ item.spec.replicas }} ready replicas.
+  loop: "{{ verify_deployments.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Read the CloudShirt pods
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    namespace: "{{ cloudshirt_namespace }}"
+    label_selectors:
+      - app.kubernetes.io/part-of=cloudshirt
+  register: verify_pods
+
+- name: Select the active pods
+  ansible.builtin.set_fact:
+    verify_active_pods: "{{ verify_pods.resources | rejectattr('metadata.deletionTimestamp', 'defined') | list }}"
+
+- name: Check the pod status
+  ansible.builtin.assert:
+    that:
+      - item.status.phase == 'Running'
+      - item.status.containerStatuses | default([]) | selectattr('ready', 'equalto', true) | list | length == item.spec.containers | length
+    fail_msg: "Pod {{ item.metadata.name }} is {{ item.status.phase }} or not ready."
+  loop: "{{ verify_active_pods }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: Wait for the external address
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Service
+    namespace: "{{ cloudshirt_namespace }}"
+    name: cloudshirt-web
+  register: verify_web_service
+  until: >-
+    verify_web_service.resources | default([]) | length == 1 and
+    verify_web_service.resources[0].status.loadBalancer.ingress | default([]) | length > 0
+  retries: "{{ verify_lb_retries | int }}"
+  delay: "{{ verify_lb_delay | int }}"
+
+- name: Set the website address
+  ansible.builtin.set_fact:
+    verify_web_address: >-
+      {{ verify_web_service.resources[0].status.loadBalancer.ingress[0].ip
+         | default(verify_web_service.resources[0].status.loadBalancer.ingress[0].hostname, true) }}
+
+- name: Check the website over HTTP
+  ansible.builtin.uri:
+    url: "http://{{ verify_web_address }}/"
+    status_code: 200
+    timeout: 15
+  register: verify_web_check
+  until: verify_web_check.status | default(0) == 200
+  retries: 12
+  delay: 5
+  when: verify_http | bool
+
+- name: Collect the deployment summary
+  ansible.builtin.set_fact:
+    verify_web_deployment: "{{ verify_deployments.resources | selectattr('metadata.name', 'equalto', 'cloudshirt-web') | first }}"
+    verify_api_deployment: "{{ verify_deployments.resources | selectattr('metadata.name', 'equalto', 'cloudshirt-api') | first }}"
+
+- name: Show the deployment summary
+  ansible.builtin.debug:
+    msg:
+      - "Web replicas: {{ verify_web_deployment.status.readyReplicas }}/{{ verify_web_deployment.spec.replicas }}"
+      - "API replicas: {{ verify_api_deployment.status.readyReplicas }}/{{ verify_api_deployment.spec.replicas }}"
+      - "Pods: {{ verify_active_pods | length }} running"
+      - "Website: http://{{ verify_web_address }}/"

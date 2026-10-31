@@ -1,0 +1,3 @@
+---
+logs_output_dir: "{{ playbook_dir | dirname | dirname }}/logs"
+logs_since: 24h

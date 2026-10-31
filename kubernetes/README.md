@@ -23,9 +23,8 @@ persistent volume. Run the commands on this page from the repository root.
 | REQ-18 | Every image reference points at the `cloudshirt-images` Artifact Registry repository. |
 | REQ-19 | `terraform/gcp/cluster.tf` provisions the GKE cluster and its node pool. |
 | REQ-20 | `cloudshirt-web` runs five replicas on the node pool managed by the GKE control plane. |
-
-REQ-21 and REQ-22 are covered by issues 50 and 51, which apply and verify this
-configuration and collect the container logs from Cloud Logging.
+| REQ-21 | [`ansible/`](../ansible/README.md) prepares the control host, writes the kubeconfig and applies these manifests with the `kubernetes.core` roles. |
+| REQ-22 | [`ansible/playbooks/logs.yml`](../ansible/README.md#collect-logs) collects the container logs of the running application with Ansible. |
 
 ## Prerequisites
 
@@ -33,7 +32,9 @@ configuration and collect the container logs from Cloud Logging.
   and the `cloudshirt-images` Artifact Registry repository.
 - `gcloud` authenticated with access to the project and the GKE cluster.
 - `kubectl` and `gke-gcloud-auth-plugin` installed.
-- The application and SQL Server images pushed to Artifact Registry.
+- The web and API images built by `terraform apply`, and the SQL Server image
+  mirrored into Artifact Registry. See
+  [`terraform/gcp/README.md`](../terraform/gcp/README.md).
 
 The worker nodes are private and have no Cloud NAT. They can reach Artifact
 Registry through Private Google Access, so every image must be mirrored there;

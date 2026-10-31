@@ -44,7 +44,8 @@ resource "terraform_data" "build_cloudshirt_images" {
   ]
 
   provisioner "local-exec" {
-    command = "bash ../../scripts/build-and-push.sh"
+    interpreter = [var.bash_executable]
+    command     = "../../scripts/build-and-push.sh"
 
     environment = {
       GCP_PROJECT = var.gcp_project_id
