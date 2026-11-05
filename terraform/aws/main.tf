@@ -14,6 +14,7 @@ resource "aws_cloudformation_stack" "cloudshirt" {
     DBPassword                 = var.db_password
     UserDataScriptUrl          = var.userdata_script_url
     AlarmEmail                 = var.alarm_email
+    ServerlessRoleArn          = var.serverless_role_arn
   }
 
   tags = {

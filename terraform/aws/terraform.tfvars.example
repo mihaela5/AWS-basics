@@ -18,3 +18,7 @@ webserver_instance_profile   = "LabInstanceProfile"
 
 alarm_email           = ""
 image_retention_count = 10
+
+# Leave empty to create a least-privilege Lambda role.
+# In AWS Academy, set TF_VAR_serverless_role_arn in the environment instead.
+# serverless_role_arn = ""

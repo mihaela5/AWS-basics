@@ -11,6 +11,9 @@ creates one `aws_cloudformation_stack` resource.
 - AWS credentials with the same permissions as `scripts/provision.sh`
 - The database password exported as `TF_VAR_db_password` (8–128 characters)
 - No CloudFormation stack with the same `stack_name` already running
+- In AWS Academy, the lab blocks custom IAM roles. Export the pre-created
+  LabRole ARN before planning; leave it empty in an account that allows
+  custom roles.
 
 ## First run
 
@@ -23,6 +26,10 @@ while the Terraform state still exists, recreate it with
 
 ```bash
 export TF_VAR_db_password='choose-a-strong-password'
+
+# AWS Academy only:
+export TF_VAR_serverless_role_arn="$(aws iam get-role --role-name LabRole \
+  --query Role.Arn --output text)"
 terraform init
 terraform plan
 terraform apply

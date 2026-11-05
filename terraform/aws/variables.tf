@@ -85,3 +85,15 @@ variable "image_retention_count" {
     error_message = "image_retention_count must be between 1 and 100."
   }
 }
+
+variable "serverless_role_arn" {
+  description = "Existing Lambda execution role ARN. Leave empty to let the serverless stack create a least-privilege role. In AWS Academy, set this to the LabRole ARN."
+  type        = string
+  default     = ""
+  nullable    = false
+
+  validation {
+    condition     = var.serverless_role_arn == "" || can(regex("^arn:aws[a-zA-Z-]*:iam::[0-9]{12}:role/.+$", var.serverless_role_arn))
+    error_message = "serverless_role_arn must be empty or a valid IAM role ARN."
+  }
+}
